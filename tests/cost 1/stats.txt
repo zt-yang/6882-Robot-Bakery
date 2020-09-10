@@ -1,0 +1,21 @@
+/Users/z/miniconda3/envs/6882/bin/python /Users/z/Documents/6882-Robot-Kitchen/astar.py
+A*Uniform ---------------
+     Problem 0 [   0.           10.00340104 3506.           12.        ]
+     Problem 1 [   0.           10.00929284 2574.           11.        ]
+
+A*Custom ---------------
+     Problem 0 [   0.           10.00294828 2653.           12.        ]
+     Problem 1 [   0.           10.00098085 1969.           13.        ]
+
+GBFCustom ---------------
+!! achieved goal ['D', 'm', 'D'] at pos (2, 2)
+     Problem 0 [ 1.          0.08030725 73.         16.        ]
+     Problem 1 [   0.           10.00569415 2329.           52.        ]
+
+-----------------------------------
+          success_rate           time       nodes_expanded   steps_in_env
+A*Uniform   (0.0, 0.0)   (10.01, 0.0)   (3040.0, 434312.0)    (11.5, 0.5)
+A*Custom    (0.0, 0.0)    (10.0, 0.0)   (2311.0, 233928.0)    (12.5, 0.5)
+GBFCustom   (0.5, 0.5)  (5.04, 49.26)  (1201.0, 2544768.0)  (34.0, 648.0)
+
+Process finished with exit code 0

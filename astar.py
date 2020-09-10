@@ -46,8 +46,8 @@ def extract_path(current_node, env=None, name=None):
 def plan(env, method, output_file_name=None):
 
     DEBUG = False
-    timeout = 30
-    action_cost = 1
+    timeout = 5
+    action_cost = 0.1
     start_time = time.time()
     state, _ = env.reset()
     actions = env.get_all_actions()
@@ -114,7 +114,7 @@ def plan(env, method, output_file_name=None):
                 child = Node(current_node, next_state, action)
 
                 # Child is on the visited list (search entire visited list)
-                if len([visited_child for visited_child in visited_list if visited_child == child]) > 0:
+                if child in visited_list:
                     continue
 
                 # Create the f, g, and h values
@@ -136,7 +136,8 @@ def plan(env, method, output_file_name=None):
                     for index in range(len(goal_objs) - 1):
                         obj1 = goal_objs[index]
                         obj2 = goal_objs[index + 1]
-                        child.h += env.get_distance(obj1, obj2, state=child.state)
+                        child.h += abs(env.get_distance(obj1, obj2, state=child.state)-1)
+                    # child.h *= 1
 
                 child.f = child.g + child.h
                 if DEBUG: print('     ', env.get_robot_pos(child.state))
@@ -148,7 +149,7 @@ def plan(env, method, output_file_name=None):
                 # Add the child to the yet_to_visit list
                 yet_to_visit_list.append(child)
 
-methods = ["A*Uniform", "A*Custom", "GBFCustom"] # , "random",
+methods = ["A*Uniform", "A*Custom", "GBFCustom"] # ,"random", "A*Uniform", "A*Custom", "GBFCustom"
 
 table = pd.DataFrame(index=methods,
     columns=['success_rate', 'time', 'nodes_expanded', 'steps_in_env'])

@@ -177,7 +177,7 @@ class RobotKitchenEnv:
     def _init_goal_objects(self):
         # set(x for lst in self._goal for x in lst)  ## for giving reward for achieving subgoals
         config = random.choice(self._goal)
-        self._goal_objects = []
+        self._goal_objects = [TABLE]
         choosing = copy.deepcopy(self.OBJECT_CHARS)
         for item in config:
             objects = []
@@ -339,7 +339,7 @@ class RobotKitchenEnv:
                         if object in self._goal_objects:
                             reward += self.REWARD_SUBGOAL
             else:
-                if DEBUG: print('unable to pick up because there  are objects above the robot')
+                if DEBUG: print('unable to pick up because there are objects above the robot')
 
 
         elif action == self.PUT_DOWN:  ## only valid if there is an object in robot hand

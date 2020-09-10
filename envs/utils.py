@@ -178,13 +178,19 @@ def initializee_color_wheel(color_density=None):
 
     return COLOR_WHEEL
 
-def draw_trace(trace, env):
+def draw_trace(trace, env=None):
     """ plot the path on map from trace, which is list of robot positions """
     length = len(trace)
     color_wheel = initializee_color_wheel(length)
     for index in range(1, length):
-        draw_line(env.get_robot_pos(trace[index]), env.get_robot_pos(trace[index-1]), linewidth=int(10 - (10 - 2) * index / length),
-                  color=color_wheel[index])
+        if env:
+            draw_line(env.get_robot_pos(trace[index]), env.get_robot_pos(trace[index-1]),
+                      linewidth=int(10 - (10 - 2) * index / length),
+                    color=color_wheel[index])
+        else: ## randomly drawing action
+            draw_line(trace[index], trace[index - 1],
+                      linewidth=int(10 - (10 - 2) * index / length),
+                      color=color_wheel[index])
     # plt.show()
 
 def record_trace(trace, env, name, dpi=300):
