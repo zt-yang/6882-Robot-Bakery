@@ -46,7 +46,7 @@ def extract_path(current_node, env=None, name=None):
 def plan(env, method, output_file_name=None):
 
     DEBUG = False
-    timeout = 10
+    timeout = 30
     action_cost = 1
     start_time = time.time()
     state, _ = env.reset()
@@ -148,7 +148,7 @@ def plan(env, method, output_file_name=None):
                 # Add the child to the yet_to_visit list
                 yet_to_visit_list.append(child)
 
-methods = [ "A*Custom", "GBFCustom"] # , "random", "A*Uniform",
+methods = ["A*Uniform", "A*Custom", "GBFCustom"] # , "random",
 
 table = pd.DataFrame(index=methods,
     columns=['success_rate', 'time', 'nodes_expanded', 'steps_in_env'])
