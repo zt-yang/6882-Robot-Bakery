@@ -11,11 +11,6 @@ try:
 except ImportError:
     from utils import render_from_layout, get_asset_path
 
-OBJECTS = TABLE, BOX1, BOX2, BREAD1, BREAD2, BREAD3, BREAD4, \
-          LETTUCE1, LETTUCE2, MEAT1, MEAT2, ROBOT = range(12)
-
-ACTIONS = UP, DOWN, LEFT, RIGHT, PICK_UP, PICK_UP_CONTAINER, PUT_DOWN = range(7)
-
 class RobotKitchenEnv:
     """A grid world where a robot hand must take out ingredients from containers and
     assemble meals (e.g., hamburger) according to orders.
@@ -118,7 +113,6 @@ class RobotKitchenEnv:
         ## relation attributes such as carrying and containing
         self._attributes = self.check_attributes()
 
-
     def reset(self):
         self._layout = self._initial_layout.copy()
         self._attributes = self.check_attributes()
@@ -135,6 +129,7 @@ class RobotKitchenEnv:
         return None
 
     def check_attributes(self):
+        # update and return a dictionary that contains a relational representation of the state.
         self._attributes = {
             'carrying': None,
             'containing': {},
@@ -175,6 +170,12 @@ class RobotKitchenEnv:
         print('!! No objects found in position', pos)
         return []
 
+    def _find_all_pos_by_obj(self, obj):
+        positions = np.argwhere(self._layout[..., obj])
+        if len(positions) > 0: return position
+        print('!! No positions found for object', obj)
+        return []
+
     def _find_pos_by_obj(self, obj):
         positions = np.argwhere(self._layout[..., obj])
         if len(positions) > 0: return positions[0]
@@ -191,6 +192,7 @@ class RobotKitchenEnv:
         self._move_obj_from_to(obj, self._find_pos_by_obj(obj), des)
 
     def _get_obj_above_pos(self, pos):
+        # return a list of objects above obj_r and at obj_c.
         obj_r, obj_c = pos
         if obj_r > 0:
             objects = self._get_objs_in_pos((obj_r-1, obj_c))
@@ -287,7 +289,7 @@ class RobotKitchenEnv:
                         if object in self._goal_objects:
                             reward += self.REWARD_SUBGOAL
             else:
-                if DEBUG: print('unable to pick up because there are objects above the robot')
+                if DEBUG: print('unable to pick up because there  are objects above the robot')
 
 
         elif action == self.PUT_DOWN:  ## only valid if there is an object in robot hand
@@ -385,6 +387,144 @@ class RobotKitchenEnv:
                     return True
         return False
 
+
+class RobotKitchenEnvRelationalAction(object):
+    ACTION_CATS = PICK_UP, PLACE_ON = range(2)
+
+    def __init__(self, layout=None, goal=None, mode='default'):
+        super().__init__()
+        self.wrapped = RobotKitchenEnv(layout, goal, mode)
+
+        # Initialize the actions.
+        self.actions = list()
+        for obj in self.wrapped.OBJECT_CHARS:
+            if obj != self.wrapped.TABLE:
+                self.actions.append((self.PICK_UP, obj))
+            self.actions.append((self.PLACE_ON, obj))
+        self.actions = tuple(self.actions)
+
+    def reset(self):
+        return self.wrapped.reset()
+
+    def get_all_actions(self):
+        return self.actions.copy()
+
+    def render(self, dpi=150):
+        return self.wrapped.render(dpi=dpi)
+
+    def step(self, action, DEBUG = False):
+        robot_position = self.wrapped._find_pos_by_obj(self.wrapped.ROBOT)
+
+        def _check_empty(x):
+            return x is None or isinstance(x, (tuple, list)) and len(x) == 0
+
+        action_cat, action_obj = action
+        if action_cat == self.PICK_UP:
+            if _check_empty(self.wrapped._get_obj_above_obj(action_obj)):
+                self.wrapped._move_obj_to(self.wrapped.ROBOT, self.wrapped._find_pos_by_obj(action_obj))
+
+                self.wrapped._attributes['carrying'] = action_obj
+                if action_obj in self.wrapped._attributes['contained']:
+                    container = self.wrapped._attributes['contained'][action_obj]
+                    self.wrapped._attributes['containing'][container].remove(action_obj)
+                    self.wrapped._attributes['contained'].pop(action_obj)
+
+        elif action_cat == self.PLACE_ON:
+            if action_obj == self.wrapped.TABLE:
+                all_table_pos = self.wrapped._find_all_pos_by_obj(self.wrapped.TABLE)
+                found = None
+                for pos in all_table_pos:
+                    if len(self.wrapped._get_obj_above_pos(pos)) == 0:
+                        found = pos
+                        break
+                if found:
+                    found = (found[0] - 1, found[1])
+                    self._step_place_on(*found)
+            else:
+                tgt_r, tgt_c = self.wrapped._find_pos_by_obj(action_obj)
+                if tgt_r > 1:
+                    tgt_r -= 1
+                    self._step_place_on(tgt_r, tgt_c)
+        else:
+            raise ValueError('Unknown action category: {}'.format(action_cat))
+
+        ## Check done: all people quenched
+        done = self.check_goal()
+
+        reward = 0
+        if done: reward = self.REWARD_GOAL
+
+        return self.get_state(), reward, done, {}
+
+    def _step_place_on(self, tgt_r, tgt_c):
+        object = self.wrapped._attributes['carrying']
+        if object is not None:
+            self.wrapped._move_obj_to(object, (tgt_r, tgt_c))
+        self.wrapped._move_obj_to(self.wrapped.ROBOT, (tgt_r, tgt_c))
+
+        objects_below = self.wrapped._get_obj_below_pos((tgt_r, tgt_c))
+        if len(objects_below) > 0:
+            object = self.wrapped._attributes['carrying']
+            if object:
+                self.wrapped._attributes['carrying'] = None
+
+                ## the object is now contained if there exists a container
+                objects = self.wrapped._get_objs_in_pos((tgt_r, tgt_c))
+                container = self.wrapped._get_container(objects)
+                if container:
+                    if container not in self.wrapped._attributes['containing']:
+                        self.wrapped._attributes['containing'][container] = []
+                    self.wrapped._attributes['containing'][container].append(object)
+                    self.wrapped._attributes['contained'][object] = container
+
+    def get_state(self):
+        return self.wrapped.get_state()
+        return tuple(sorted(map(tuple, np.argwhere(self._layout))))
+
+    def set_state(self, state):
+        return self.wrapped.set_state(state)
+
+    def state_to_str(self, state=None):
+        return self.wrapped.state_to_str(state)
+
+    @functools.lru_cache(maxsize=1000)
+    def compute_reward(self, state, action):
+        original_state = self.get_state()
+        self.set_state(state)
+        _, reward, _, _ = self.step(action)
+        self.set_state(original_state)
+        return reward
+
+    @functools.lru_cache(maxsize=1000)
+    def compute_transition(self, state, action):
+        original_state = self.get_state()
+        self.set_state(state)
+        next_state, _, _, _ = self.step(action)
+        self.set_state(original_state)
+        return next_state
+
+    @functools.lru_cache(maxsize=1000)
+    def compute_done(self, state, action):
+        original_state = self.get_state()
+        self.set_state(state)
+        _, _, done, _ = self.step(action)
+        self.set_state(original_state)
+        return done
+
+    @functools.lru_cache(maxsize=1000)
+    def check_goal(self, state=None):
+        """ match each ingredient from bottom up """
+        return self.wrapped.check_goal(state=state)
+
+
+# For TEST ONLY.
+OBJECTS = TABLE, BOX1, BOX2, BREAD1, BREAD2, BREAD3, BREAD4, \
+          LETTUCE1, LETTUCE2, MEAT1, MEAT2, ROBOT = range(12)
+ACTIONS = UP, DOWN, LEFT, RIGHT, PICK_UP, PICK_UP_CONTAINER, PUT_DOWN = range(7)
+
+
+# Section 1: test for the motion planning setting.
+
 def test_goal_checking():
     """ directly move objects around and see if the goal table configuration is met"""
 
@@ -399,8 +539,8 @@ def test_goal_checking():
     outfile = join('tests', "test_goal_checking.mp4")
     imageio.mimsave(outfile, [env.render(dpi=300)])
 
-def test_steps():
 
+def test_steps():
     dpi = 300
     env = RobotKitchenEnv()
 
@@ -416,6 +556,7 @@ def test_steps():
 
     outfile = join('tests', "test_steps.mp4")
     imageio.mimsave(outfile, images)
+
 
 def test_custom_layout():
     dpi = 300
@@ -480,8 +621,30 @@ def test_custom_layout():
     outfile = join('tests', "test_custom_layout.mp4")
     imageio.mimsave(outfile, images)
 
-if __name__ == "__main__":
 
+# Section 2: test for the relational task planning setting.
+
+
+def test_steps_relational():
+    dpi = 300
+    env = RobotKitchenEnvRelationalAction()
+
+    ## some actions are invalid, check if the corresponding warning messages are printed out
+    actions = [(env.PICK_UP, env.wrapped.MEAT1), (env.PLACE_ON, env.wrapped.BREAD4)]
+
+    images = []
+    state, _ = env.reset()
+    images.append(env.render(dpi=dpi))
+    for action in tqdm(actions):
+        state, reward, done, _ = env.step(action, DEBUG = True)
+        print(env.state_to_str(state))
+        images.append(env.render(dpi=dpi))
+
+    outfile = join('tests', "test_steps.mp4")
+    imageio.mimsave(outfile, images)
+
+
+if __name__ == "__main__":
     ## directly move objects around, test env.check_goal()
     # test_goal_checking()
 
@@ -489,4 +652,7 @@ if __name__ == "__main__":
     # test_steps()
 
     ## given custom layout and goal configuration, test environment initialization()
-    test_custom_layout()
+    # test_custom_layout()
+
+    test_steps_relational()
+
