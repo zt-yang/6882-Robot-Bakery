@@ -1,6 +1,8 @@
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 from matplotlib.patches import RegularPolygon
 from PIL import Image
+import imageio
+from os.path import join
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -97,11 +99,11 @@ def display_image(img, title=None):
     # plt.show()
 
 def get_robot_pos(pos):
-    return ((pos[0]+0.5)*50, (pos[1]+0.5)*50)
+    return ((pos[0]+0.5)*56, (pos[1]+0.5)*56)
 
-def draw_line(state1, state2, linewidth=5, color='#e74c3c'):
-    point1 = get_robot_pos(state1)
-    point2 = get_robot_pos(state2)
+def draw_line(pos1, pos2, linewidth=5, color='#e74c3c'):
+    point1 = get_robot_pos(pos1)
+    point2 = get_robot_pos(pos2)
     plt.plot([point1[1], point2[1]], [point1[0], point2[0]], linewidth=linewidth, color=color)
 
 def generate_color_wheel(original_color, size):
@@ -176,12 +178,20 @@ def initializee_color_wheel(color_density=None):
 
     return COLOR_WHEEL
 
-def draw_trace(trace):
-    """ plot the path on map """
+def draw_trace(trace, env):
+    """ plot the path on map from trace, which is list of robot positions """
     length = len(trace)
     color_wheel = initializee_color_wheel(length)
     for index in range(1, length):
-        draw_line(trace[index], trace[index-1], linewidth=int(10 - (10 - 2) * index / length),
+        draw_line(env.get_robot_pos(trace[index]), env.get_robot_pos(trace[index-1]), linewidth=int(10 - (10 - 2) * index / length),
                   color=color_wheel[index])
     # plt.show()
 
+def record_trace(trace, env, name, dpi=300):
+    """ plot the path on map from trace, which is list of robot positions """
+    images = []
+    for state in trace:
+        env.set_state(state)
+        images.append(env.render(dpi=dpi))
+    outfile = join('tests', name+'.mp4')
+    imageio.mimsave(outfile, images)

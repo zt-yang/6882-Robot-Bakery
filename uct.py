@@ -1,5 +1,6 @@
 from collections import defaultdict
 import numpy as np
+from os.path import join
 
 class UCT:
     """Implementation of UCT based on Leslie's lecture notes
@@ -104,7 +105,7 @@ if __name__ == "__main__":
 
             start_time = time.time()
 
-            env = RobotKitchenEnv()
+            env = RobotKitchenEnv(mode='simple')
 
             uct = UCT(env.get_all_actions(), env.compute_reward, env.compute_transition, done_fn=env.compute_done,
                       num_search_iters=num_search_iters, gamma=gamma, seed=0)
@@ -137,7 +138,7 @@ if __name__ == "__main__":
 
             if render:
                 outfile = str(replanning_interval)+' '+str(num_search_iters)+" uct.mp4"
-                imageio.mimsave(outfile, images)
+                imageio.mimsave(join('tests', outfile), images)
                 print("Wrote out to", outfile)
 
             duration = time.time() - start_time

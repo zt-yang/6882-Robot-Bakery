@@ -5,10 +5,32 @@ import functools
 import time
 from os.path import join
 from tqdm import tqdm
+from enum import Enum
+import random
+import copy
+import math
+
+class OBJ_CATS(Enum):
+    TABLE = 0
+    BOX1 = 1
+    BOX2 = 2
+    BREAD1 = 3
+    BREAD2 = 4
+    BREAD3 = 5
+    BREAD4 = 6
+    LETTUCE1 = 7
+    LETTUCE2 = 8
+    MEAT1 = 9
+    MEAT2 = 10
+    ROBOT = 11
+for name in [x for x in dir(OBJ_CATS) if not x.startswith('__')]:
+    globals()[name] = getattr(OBJ_CATS, name).value
 
 try:
+    from .layouts import *
     from .utils import render_from_layout, get_asset_path
 except ImportError:
+    from layouts import *
     from utils import render_from_layout, get_asset_path
 
 class RobotKitchenEnv:
@@ -22,11 +44,7 @@ class RobotKitchenEnv:
     """
 
     ## Types of objects
-    OBJECTS = TABLE, BOX1, BOX2, \
-              BREAD1, BREAD2, BREAD3, BREAD4, \
-              LETTUCE1, LETTUCE2, MEAT1, MEAT2, \
-              ROBOT \
-               = range(12)
+    OBJECTS = OBJ_CATS
 
     ## used for printing and for token image in assets folder
     ## e.g., plt.imread(get_asset_path('table.png')),
@@ -57,36 +75,6 @@ class RobotKitchenEnv:
     }
 
     CONTAINERS = ['B']
-    DEFAULT_GOAL = [['D','l','m','D'], ['D','m','l','D']]
-
-    # Create layouts
-    """
-    +--+--+--+--+--+
-    |RB|  |  |  |  |
-    +--+--+--+--+--+
-    |  |  |  |  |D1|
-    +--+--+--+--+--+
-    |BM|  |  |  |D2|
-    +--+--+--+--+--+
-    |BL|  |  |D4|D3|
-    +--+--+--+--+--+
-    |TB|TB|TB|TB|TB|
-    +--+--+--+--+--+
-    """
-    DEFAULT_LAYOUT = np.zeros((5, 5, len(OBJECTS)), dtype=bool)
-    for i in range(5):
-        DEFAULT_LAYOUT[4, i, TABLE] = 1
-    DEFAULT_LAYOUT[0, 0, ROBOT] = 1
-    DEFAULT_LAYOUT[1, 4, BREAD1] = 1
-    DEFAULT_LAYOUT[2, 4, BREAD2] = 1
-    DEFAULT_LAYOUT[3, 4, BREAD3] = 1
-    DEFAULT_LAYOUT[3, 3, BREAD4] = 1
-    DEFAULT_LAYOUT[2, 0, MEAT1] = 1
-    DEFAULT_LAYOUT[2, 0, MEAT2] = 1
-    DEFAULT_LAYOUT[2, 0, BOX1] = 1
-    DEFAULT_LAYOUT[3, 0, LETTUCE1] = 1
-    DEFAULT_LAYOUT[3, 0, LETTUCE2] = 1
-    DEFAULT_LAYOUT[3, 0, BOX2] = 1
 
     ## Actions
     ACTIONS = UP, DOWN, LEFT, RIGHT, PICK_UP, PICK_UP_CONTAINER, PUT_DOWN = range(7)
@@ -98,35 +86,62 @@ class RobotKitchenEnv:
 
     def __init__(self, layout=None, goal=None, mode='default'):
         if layout is None:
-            if mode == 'default':
-                layout = self.DEFAULT_LAYOUT
-                goal = self.DEFAULT_GOAL
-            else:
-                raise Exception("Unrecognized mode.")
+            layout, goal = self._get_layout_from_mode(mode)
         self._initial_layout = layout
         self._layout = layout.copy()
+        self._visible_objects = self._init_visible_objects()
 
         ## configurations like DEFAULT_GOAL = [['D','l','m','D'], ['D','m','l','D']]
-        self._goal = goal
-        self._goal_objects = set(x for lst in goal for x in lst) ## for giving reward for achieving subgoals
+        self._goal, self._goal_attributes = goal
+        self._goal_objects = self._init_goal_objects()
 
         ## relation attributes such as carrying and containing
+        self._attributes_in_state = ['carrying']    ## only some attributes are in the state space
         self._attributes = self.check_attributes()
+
+        self._init_token_images()
 
     def reset(self):
         self._layout = self._initial_layout.copy()
         self._attributes = self.check_attributes()
         return self.get_state(), {}
 
+    def _get_layout_from_mode(self, mode):
+        if isinstance(mode, int):
+            mode = {0: 'simple', 1: 'default', 2: 'difficult'}[mode]
+        if mode == 'default':
+            layout = DEFAULT_LAYOUT
+            goal = DEFAULT_GOAL
+        elif mode == 'simple':
+            layout = SIMPLE_LAYOUT
+            goal = SIMPLE_GOAL
+        elif mode == 'difficult':
+            layout = DIFFICULT_LAYOUT
+            goal = DIFFICULT_GOAL
+        else:
+            raise Exception("Unrecognized mode.")
+        return layout, goal
+
+    def fix_problem_index(self, num):
+        layout, goal = self._get_layout_from_mode(num)
+        self._initial_layout = layout
+        self.reset()
+        self._visible_objects = self._init_visible_objects()
+        self._goal, self._goal_attributes = goal  ## goal consists of the matching configuration and key attributes
+        self._goal_objects = self._init_goal_objects()
+
     def _get_container(self, objects):
+        """ return the container object among all objects in the grid """
         containers = [o for o in objects if self.OBJECT_CHARS[o] in self.CONTAINERS]
         if len(containers) != 0: return containers[0]
         return None
 
     def _get_contained(self, objects):
+        """ given all objects in a grid,
+            return the list of objects inside the container or out in th air """
         contained = [o for o in objects if self.OBJECT_CHARS[o] not in self.CONTAINERS]
         if len(contained) != 0: return contained
-        return None
+        return [None]
 
     def check_attributes(self):
         # update and return a dictionary that contains a relational representation of the state.
@@ -152,16 +167,46 @@ class RobotKitchenEnv:
     def get_all_actions(self):
         return [a for a in self.ACTIONS]
 
+    def _init_visible_objects(self):
+        self._visible_objects = []
+        for obj_cat in self.OBJECTS:
+            if len(self._find_pos_by_obj(obj_cat.value)) != 0:
+                self._visible_objects.append(obj_cat.value)
+        return self._visible_objects
+
+    def _init_goal_objects(self):
+        # set(x for lst in self._goal for x in lst)  ## for giving reward for achieving subgoals
+        config = random.choice(self._goal)
+        self._goal_objects = []
+        choosing = copy.deepcopy(self.OBJECT_CHARS)
+        for item in config:
+            objects = []
+            for obj_cat, char in choosing.items():
+                if item == char and obj_cat in self._visible_objects:
+                    objects.append(obj_cat)
+            chosen_obj = random.choice(objects)
+            self._goal_objects.append(chosen_obj)
+            # print('removed', chosen_obj, choosing[chosen_obj])
+            choosing.pop(chosen_obj) ## don't choose the same object as target object
+        # print(config, goal_objects)
+        return self._goal_objects
+
     def render(self, dpi=150):
         return render_from_layout(self._layout, self._get_token_images, dpi=dpi)
 
+    def render_from_state(self, state):
+        self.set_state(state)
+        return self.render()
+
+    def _init_token_images(self):
+        for obj in self.OBJECTS:
+            self.TOKEN_IMAGES[obj.value] = plt.imread(get_asset_path(str(self.NAMES[obj.value]) + '.png'))
+
     def _get_token_images(self, obs_cell):
         images = []
-        for obj in self.OBJECTS:
-            self.TOKEN_IMAGES[obj] = plt.imread(get_asset_path(str(self.NAMES[obj])+'.png'))
         for token in self.OBJECTS:
-            if obs_cell[token]:
-                images.append(self.TOKEN_IMAGES[token])
+            if obs_cell[token.value]:
+                images.append(self.TOKEN_IMAGES[token.value])
         return images
 
     def _get_objs_in_pos(self, pos):
@@ -172,15 +217,19 @@ class RobotKitchenEnv:
 
     def _find_all_pos_by_obj(self, obj):
         positions = np.argwhere(self._layout[..., obj])
-        if len(positions) > 0: return position
-        print('!! No positions found for object', obj)
+        if len(positions) > 0: return positions
+        # print('!! No positions found for object', obj)
         return []
 
     def _find_pos_by_obj(self, obj):
         positions = np.argwhere(self._layout[..., obj])
         if len(positions) > 0: return positions[0]
-        print('!! No positions found for object', obj)
+        # print('!! No positions found for object', obj)
         return []
+
+    def get_robot_pos(self, state=None):
+        self.set_state(state)
+        return self._find_pos_by_obj(ROBOT)
 
     def _move_obj_from_to(self, obj, ori, des):
         # Remove old object
@@ -214,24 +263,25 @@ class RobotKitchenEnv:
         return []
 
     def _remove_robot_and_carried(self, objects):
-        if self.ROBOT in objects:
-            objects.remove(self.ROBOT)
+        if ROBOT in objects:
+            objects.remove(ROBOT)
             carrying = self._attributes['carrying']
             if carrying != None:
                 objects.remove(carrying)
                 if carrying in self._attributes['containing']:
                     for contained in self._attributes['containing'][carrying]:
-                        objects.remove(contained)
+                        if contained in objects:
+                            objects.remove(contained)
         return objects
 
     def _get_obj_below_obj(self, obj):
         return self._get_obj_below_pos(self._find_pos_by_obj(obj))
 
-    def step(self, action, DEBUG = False):
+    def step(self, action, DEBUG=False, STEP=True):
 
         # Start out reward at 0
         reward = 0
-        rob_pos = rob_r, rob_c = self._find_pos_by_obj(self.ROBOT)
+        rob_pos = rob_r, rob_c = self._find_pos_by_obj(ROBOT)
 
         # Move the robot, along with the object if it has one
         if action in [self.UP, self.DOWN, self.LEFT, self.RIGHT]:
@@ -243,9 +293,9 @@ class RobotKitchenEnv:
 
                 if len(self._get_obj_above_pos(new_pos)) == 0:
 
-                    if self.TABLE not in self._get_objs_in_pos(new_pos):
+                    if TABLE not in self._get_objs_in_pos(new_pos):
 
-                        self._move_obj_from_to(self.ROBOT, rob_pos, new_pos)
+                        self._move_obj_from_to(ROBOT, rob_pos, new_pos)
                         if DEBUG: print('move to', new_pos)
 
                         if self._attributes['carrying'] != None:
@@ -269,7 +319,7 @@ class RobotKitchenEnv:
             if len(self._get_obj_above_pos(rob_pos)) == 0:
                 ## Carry the object if there is any in the new grid
                 objects = self._get_objs_in_pos(rob_pos)
-                objects.remove(self.ROBOT)
+                objects.remove(ROBOT)
                 if len(objects) > 0:
 
                     if action == self.PICK_UP_CONTAINER:
@@ -298,7 +348,7 @@ class RobotKitchenEnv:
             if len(objects_below) > 0:
 
                 object = self._attributes['carrying']
-                if object:
+                if object!=None:
                     self._attributes['carrying'] = None
                     if DEBUG: print('stop carrying', self.NAMES[object])
 
@@ -321,24 +371,45 @@ class RobotKitchenEnv:
         done = self.check_goal()
         if done: reward += self.REWARD_GOAL
 
-        return self.get_state(), reward, done, {}
+        return self.get_state(DEBUG=False), reward, done, {}
 
-    def get_state(self):
-        return tuple(sorted(map(tuple, np.argwhere(self._layout))))
+    def get_state(self, DEBUG=False):
+        layout_state = tuple(('layout', tuple(sorted(map(tuple, np.argwhere(self._layout))))))
+        states = [layout_state]
+        for attribute in self._attributes_in_state: ## for the attributes we care about
+            states.append(tuple((attribute, self._attributes[attribute])))
+        state = tuple(states)
+        if DEBUG: print(state)
+        return state
+
+    def _get_state_var(self, trg_var, state=None):
+        if state==None: state = self.get_state()
+        for var, value in state:
+            if trg_var == var:
+                return value
+        return None
 
     def set_state(self, state):
         if state:
             self._layout = np.zeros_like(self._initial_layout)
-            for i, j, k in state:
+            for i, j, k in self._get_state_var('layout', state):
                 self._layout[i, j, k] = 1
             self.check_attributes()
+            for attribute in self._attributes_in_state:
+                self._attributes[attribute] = self._get_state_var(attribute, state)
 
     def state_to_str(self, state=None):
         if state==None: state=self.get_state()
         layout = np.full(self._initial_layout.shape[:2], " ", dtype=object)
-        for i, j, k in state:
+        for i, j, k in self._get_state_var('layout', state):
             layout[i, j] = self.OBJECT_CHARS[k]
         return '\n' + '\n'.join(''.join(row) for row in layout)
+
+    def get_distance(self, obj1, obj2, state=None):
+        self.set_state(state)
+        pos1 = self._find_pos_by_obj(obj1)
+        pos2 = self._find_pos_by_obj(obj2)
+        return math.sqrt(((pos1[0] - pos2[0]) ** 2) + ((pos1[1] - pos2[1]) ** 2))
 
     @functools.lru_cache(maxsize=1000)
     def compute_reward(self, state, action):
@@ -355,6 +426,9 @@ class RobotKitchenEnv:
         next_state, _, _, _ = self.step(action)
         self.set_state(original_state)
         return next_state
+
+    def get_successor_state(self, state, action):
+        return self.compute_transition(state, action)
 
     @functools.lru_cache(maxsize=1000)
     def compute_done(self, state, action):
@@ -376,7 +450,16 @@ class RobotKitchenEnv:
                 if found: return start_index+count_index
             return None
 
-        self.set_state(state)
+        if state:
+            self.set_state(state)
+        else:
+            state = self.get_state()
+
+        ## all attributes in state must match goal attribute state
+        for attribute in self._attributes_in_state:
+            if self._attributes[attribute] != self._goal_attributes[attribute]:
+                return False
+
         for col in range(self._layout.shape[1]):
             config = np.nonzero(self._layout[:,col,:])[1].tolist()
             config = [self.OBJECT_CHARS[x] for x in config]
@@ -398,7 +481,7 @@ class RobotKitchenEnvRelationalAction(object):
         # Initialize the actions.
         self.actions = list()
         for obj in self.wrapped.OBJECT_CHARS:
-            if obj != self.wrapped.TABLE:
+            if obj != TABLE:
                 self.actions.append((self.PICK_UP, obj))
             self.actions.append((self.PLACE_ON, obj))
         self.actions = tuple(self.actions)
@@ -413,7 +496,7 @@ class RobotKitchenEnvRelationalAction(object):
         return self.wrapped.render(dpi=dpi)
 
     def step(self, action, DEBUG = False):
-        robot_position = self.wrapped._find_pos_by_obj(self.wrapped.ROBOT)
+        robot_position = self.wrapped._find_pos_by_obj(ROBOT)
 
         def _check_empty(x):
             return x is None or isinstance(x, (tuple, list)) and len(x) == 0
@@ -421,7 +504,7 @@ class RobotKitchenEnvRelationalAction(object):
         action_cat, action_obj = action
         if action_cat == self.PICK_UP:
             if _check_empty(self.wrapped._get_obj_above_obj(action_obj)):
-                self.wrapped._move_obj_to(self.wrapped.ROBOT, self.wrapped._find_pos_by_obj(action_obj))
+                self.wrapped._move_obj_to(ROBOT, self.wrapped._find_pos_by_obj(action_obj))
 
                 self.wrapped._attributes['carrying'] = action_obj
                 if action_obj in self.wrapped._attributes['contained']:
@@ -430,8 +513,8 @@ class RobotKitchenEnvRelationalAction(object):
                     self.wrapped._attributes['contained'].pop(action_obj)
 
         elif action_cat == self.PLACE_ON:
-            if action_obj == self.wrapped.TABLE:
-                all_table_pos = self.wrapped._find_all_pos_by_obj(self.wrapped.TABLE)
+            if action_obj == TABLE:
+                all_table_pos = self.wrapped._find_all_pos_by_obj(TABLE)
                 found = None
                 for pos in all_table_pos:
                     if len(self.wrapped._get_obj_above_pos(pos)) == 0:
@@ -460,7 +543,7 @@ class RobotKitchenEnvRelationalAction(object):
         object = self.wrapped._attributes['carrying']
         if object is not None:
             self.wrapped._move_obj_to(object, (tgt_r, tgt_c))
-        self.wrapped._move_obj_to(self.wrapped.ROBOT, (tgt_r, tgt_c))
+        self.wrapped._move_obj_to(ROBOT, (tgt_r, tgt_c))
 
         objects_below = self.wrapped._get_obj_below_pos((tgt_r, tgt_c))
         if len(objects_below) > 0:
@@ -518,12 +601,22 @@ class RobotKitchenEnvRelationalAction(object):
 
 
 # For TEST ONLY.
-OBJECTS = TABLE, BOX1, BOX2, BREAD1, BREAD2, BREAD3, BREAD4, \
-          LETTUCE1, LETTUCE2, MEAT1, MEAT2, ROBOT = range(12)
 ACTIONS = UP, DOWN, LEFT, RIGHT, PICK_UP, PICK_UP_CONTAINER, PUT_DOWN = range(7)
 
 
 # Section 1: test for the motion planning setting.
+
+
+def test_get_state():
+    """ test state representation """
+    env = RobotKitchenEnv()
+    state_1 = env.get_state(DEBUG=True)
+
+    trg_state = test_steps(DEBUG=False).get_state(DEBUG=True)
+
+    env.set_state(trg_state)
+    state_2 = env.get_state(DEBUG=True)
+
 
 def test_goal_checking():
     """ directly move objects around and see if the goal table configuration is met"""
@@ -531,16 +624,17 @@ def test_goal_checking():
     env = RobotKitchenEnv()
     print(env._goal)
     print(env.state_to_str())
-    env._move_obj_to(env.MEAT1, (2,3))
-    env._move_obj_to(env.LETTUCE1, (1,3))
-    env._move_obj_to(env.BREAD1, (0,3))
+    env._move_obj_to(MEAT1, (2,3))
+    env._move_obj_to(LETTUCE1, (1,3))
+    env._move_obj_to(BREAD1, (0,3))
+
     env.check_goal()
 
     outfile = join('tests', "test_goal_checking.mp4")
     imageio.mimsave(outfile, [env.render(dpi=300)])
 
 
-def test_steps():
+def test_steps(DEBUG=True):
     dpi = 300
     env = RobotKitchenEnv()
 
@@ -551,11 +645,13 @@ def test_steps():
     state, _ = env.reset()
     images.append(env.render(dpi=dpi))
     for action in tqdm(actions):
-        state, reward, done, _ = env.step(action, DEBUG = True)
+        state, reward, done, _ = env.step(action, DEBUG = DEBUG)
         images.append(env.render(dpi=dpi))
 
     outfile = join('tests', "test_steps.mp4")
     imageio.mimsave(outfile, images)
+
+    return env
 
 
 def test_custom_layout():
@@ -577,7 +673,7 @@ def test_custom_layout():
     |TB|TB|TB|TB|TB|TB|TB|
     +--+--+--+--+--+--+--+
     """
-    layout = np.zeros((6, 7, len(OBJECTS)), dtype=bool)
+    layout = np.zeros((6, 7, len(dir(OBJ_CATS))), dtype=bool)
     for i in range(7):
         layout[5, i, TABLE] = 1
     layout[0, 0, ROBOT] = 1
@@ -593,7 +689,7 @@ def test_custom_layout():
     layout[4, 0, BOX2] = 1
 
     ## only one ordering of ingredients that count as a MEGA hamburger
-    goal = [['D', 'm', 'l', 'm', 'D']]
+    goal = [['D', 'm', 'l', 'm', 'D']], {'carrying': None}
     env = RobotKitchenEnv(layout=layout, goal=goal)
 
     ## just to visualize the layout
@@ -622,6 +718,29 @@ def test_custom_layout():
     imageio.mimsave(outfile, images)
 
 
+def test_simple_layout():
+    dpi = 300
+
+    env = RobotKitchenEnv()
+    env.fix_problem_index(0)
+
+    ## just to visualize the layout
+    # outfile = join('tests', "test_simple_layout.mp4")
+    # imageio.mimsave(outfile, [env.render(dpi=300)])
+
+    actions = [RIGHT, RIGHT, RIGHT, DOWN, DOWN, PICK_UP, UP, PUT_DOWN]
+
+    images = []
+    state, _ = env.reset()
+    images.append(env.render(dpi=dpi))
+    for action in tqdm(actions):
+        state, reward, done, _ = env.step(action, DEBUG=True)
+        images.append(env.render(dpi=dpi))
+
+    outfile = join('tests', "test_simple_layout.mp4")
+    imageio.mimsave(outfile, images)
+
+
 # Section 2: test for the relational task planning setting.
 
 
@@ -630,7 +749,7 @@ def test_steps_relational():
     env = RobotKitchenEnvRelationalAction()
 
     ## some actions are invalid, check if the corresponding warning messages are printed out
-    actions = [(env.PICK_UP, env.wrapped.MEAT1), (env.PLACE_ON, env.wrapped.BREAD4)]
+    actions = [(env.PICK_UP, MEAT1), (env.PLACE_ON, BREAD4)]
 
     images = []
     state, _ = env.reset()
@@ -640,11 +759,14 @@ def test_steps_relational():
         print(env.state_to_str(state))
         images.append(env.render(dpi=dpi))
 
-    outfile = join('tests', "test_steps.mp4")
+    outfile = join('tests', "test_steps_relational.mp4")
     imageio.mimsave(outfile, images)
 
-
 if __name__ == "__main__":
+
+    ## test state representation
+    # test_get_state()
+
     ## directly move objects around, test env.check_goal()
     # test_goal_checking()
 
@@ -653,6 +775,9 @@ if __name__ == "__main__":
 
     ## given custom layout and goal configuration, test environment initialization()
     # test_custom_layout()
+
+    ## given a simple layout for testing search algorithms
+    # test_simple_layout()
 
     test_steps_relational()
 
