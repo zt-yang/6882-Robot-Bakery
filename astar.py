@@ -1,16 +1,16 @@
 import matplotlib.pyplot as plt
-import pddlgym
 import random
 import statistics
 import numpy as np
 import time
 import math
 import pandas as pd
+import os
 from os.path import join
 from envs.utils import draw_trace, record_trace, display_image
 pd.set_option('display.max_columns', None)
 
-from envs.robot_kitchen import RobotKitchenEnv
+from envs.robot_kitchen import RobotKitchenEnv, RobotKitchenEnvRelationalAction
 
 class Node:
     """ A node class for A*/BFS """
@@ -32,13 +32,20 @@ def get_stats(sample):
 
 def extract_path(current_node, env=None, name=None):
     path = []
+    actions = []
     while current_node.parent != None:
         path.append(current_node.state)
+        actions.append(current_node.action)
         # path.append(env.get_robot_pos(current_node.state))
         current_node = current_node.parent
     path.append(current_node.state)
-
     path.reverse()
+    actions.reverse()
+
+    # for s, a in zip(path, actions):
+    #     print(s, a)
+    # print(path[-1])
+
     record_trace(path, env, name)
     draw_trace(path, env)
     return len(path)
@@ -102,6 +109,7 @@ def plan(env, method, output_file_name=None):
                 time_taken = time.time() - start_time
                 nodes_expanded = len(visited_list)
                 steps_in_env = extract_path(current_node, env=env, name=output_file_name)
+
                 return success_rate, time_taken, nodes_expanded, steps_in_env
 
             # Generate children from all adjacent squares
@@ -154,29 +162,35 @@ methods = ["A*Uniform", "A*Custom", "GBFCustom"] # ,"random", "A*Uniform", "A*Cu
 table = pd.DataFrame(index=methods,
     columns=['success_rate', 'time', 'nodes_expanded', 'steps_in_env'])
 
-env = RobotKitchenEnv()
-num_problems = 2  # in total three layouts: simple 4 by 4, default 5 by 5, difficult 6 by 7
-for method in methods:
+env_motion = RobotKitchenEnv()
+env_relational = RobotKitchenEnvRelationalAction()
+for env in [env_relational, env_motion]:
+    print('Using:', env.__class__.__name__)
+    num_problems = 1  # in total three layouts: simple 4 by 4, default 5 by 5, difficult 6 by 7
+    for method in methods:
+        print(method, '---------------')
+        data = np.zeros((num_problems, 4))
 
-    print(method, '---------------')
-    data = np.zeros((num_problems, 4))
+        for problem in range(num_problems):
+            ## initiate the environment
+            env.fix_problem_index(problem)
+            state, _ = env.reset()
+            name = "P"+str(problem)+", "+str(method)
 
-    for problem in range(num_problems):
+            display_image(env.render_from_state(state), name)
+            data[problem] = plan(env, method, output_file_name=name)  ## [1,1,1,1]
+            png_filename = join('tests',env.__class__.__name__, name+'.png')
+            os.makedirs(os.path.dirname(png_filename), exist_ok=True)
+            plt.savefig(png_filename)
 
-        ## initiate the environment
-        env.fix_problem_index(problem)
-        state, _ = env.reset()
-        name = "P"+str(problem)+", "+str(method)
-        display_image(env.render_from_state(state), name)
-        data[problem] = plan(env, method, output_file_name=name)  ## [1,1,1,1]
-        plt.savefig(join('tests',name+'.png'))
-        print('     Problem', problem, data[problem])
+            # print('     Problem', problem, data[problem])
 
-    print()
-    table.loc[method] = [get_stats(data[:,0]),
-                         get_stats(data[:,1]),
-                         get_stats(data[:,2]),
-                         get_stats(data[:,3])]
+        print()
+        table.loc[method] = data[:]
+        # table.loc[method] = [get_stats(data[:,0]),
+        #                      get_stats(data[:,1]),
+        #                      get_stats(data[:,2]),
+        #                      get_stats(data[:,3])]
 
-print('-----------------------------------')
-print(table)
+    print('-----------------------------------')
+    print(table)

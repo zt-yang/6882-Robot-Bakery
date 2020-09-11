@@ -10,6 +10,11 @@ import random
 import copy
 import math
 
+try:
+    import jacinle
+except:
+    pas
+
 class OBJ_CATS(Enum):
     TABLE = 0
     BOX1 = 1
@@ -267,7 +272,8 @@ class RobotKitchenEnv:
             objects.remove(ROBOT)
             carrying = self._attributes['carrying']
             if carrying != None:
-                objects.remove(carrying)
+                if carrying in objects:
+                    objects.remove(carrying)
                 if carrying in self._attributes['containing']:
                     for contained in self._attributes['containing'][carrying]:
                         if contained in objects:
@@ -486,11 +492,28 @@ class RobotKitchenEnvRelationalAction(object):
             self.actions.append((self.PLACE_ON, obj))
         self.actions = tuple(self.actions)
 
+    @property
+    def _goal_objects(self):
+        return self.wrapped._goal_objects
+
+    def fix_problem_index(self, num):
+        self.wrapped.fix_problem_index(num)
+
     def reset(self):
         return self.wrapped.reset()
 
+    def render_from_state(self, state):
+        self.set_state(state)
+        return self.render()
+
+    def get_robot_pos(self, state=None):
+        return self.wrapped.get_robot_pos(state)
+
+    def get_distance(self, obj1, obj2, state=None):
+        return 1
+
     def get_all_actions(self):
-        return self.actions.copy()
+        return self.actions
 
     def render(self, dpi=150):
         return self.wrapped.render(dpi=dpi)
@@ -503,31 +526,35 @@ class RobotKitchenEnvRelationalAction(object):
 
         action_cat, action_obj = action
         if action_cat == self.PICK_UP:
-            if _check_empty(self.wrapped._get_obj_above_obj(action_obj)):
-                self.wrapped._move_obj_to(ROBOT, self.wrapped._find_pos_by_obj(action_obj))
+            if self.wrapped._attributes['carrying'] is None and not _check_empty(self.wrapped._find_pos_by_obj(action_obj)):
+                if _check_empty(self.wrapped._get_obj_above_obj(action_obj)):
+                    self.wrapped._move_obj_to(ROBOT, self.wrapped._find_pos_by_obj(action_obj))
 
-                self.wrapped._attributes['carrying'] = action_obj
-                if action_obj in self.wrapped._attributes['contained']:
-                    container = self.wrapped._attributes['contained'][action_obj]
-                    self.wrapped._attributes['containing'][container].remove(action_obj)
-                    self.wrapped._attributes['contained'].pop(action_obj)
+                    self.wrapped._attributes['carrying'] = action_obj
+                    if action_obj in self.wrapped._attributes['contained']:
+                        container = self.wrapped._attributes['contained'][action_obj]
+                        self.wrapped._attributes['containing'][container].remove(action_obj)
+                        self.wrapped._attributes['contained'].pop(action_obj)
 
         elif action_cat == self.PLACE_ON:
-            if action_obj == TABLE:
-                all_table_pos = self.wrapped._find_all_pos_by_obj(TABLE)
-                found = None
-                for pos in all_table_pos:
-                    if len(self.wrapped._get_obj_above_pos(pos)) == 0:
-                        found = pos
-                        break
-                if found:
-                    found = (found[0] - 1, found[1])
-                    self._step_place_on(*found)
-            else:
-                tgt_r, tgt_c = self.wrapped._find_pos_by_obj(action_obj)
-                if tgt_r > 1:
-                    tgt_r -= 1
-                    self._step_place_on(tgt_r, tgt_c)
+            object = self.wrapped._attributes['carrying']
+            if object is not None:
+                if action_obj == TABLE:
+                    all_table_pos = self.wrapped._find_all_pos_by_obj(TABLE)
+                    found = None
+                    for pos in all_table_pos:
+                        if len(self.wrapped._get_obj_above_pos(pos)) == 0:
+                            found = tuple(pos)
+                            break
+                    if found is not None:
+                        found = (found[0] - 1, found[1])
+                        self._step_place_on(*found)
+                else:
+                    if not _check_empty(self.wrapped._find_pos_by_obj(action_obj)):
+                        tgt_r, tgt_c = self.wrapped._find_pos_by_obj(action_obj)
+                        if tgt_r > 1:
+                            tgt_r -= 1
+                            self._step_place_on(tgt_r, tgt_c)
         else:
             raise ValueError('Unknown action category: {}'.format(action_cat))
 
@@ -585,6 +612,9 @@ class RobotKitchenEnvRelationalAction(object):
         next_state, _, _, _ = self.step(action)
         self.set_state(original_state)
         return next_state
+
+    def get_successor_state(self, state, action):
+        return self.compute_transition(state, action)
 
     @functools.lru_cache(maxsize=1000)
     def compute_done(self, state, action):
