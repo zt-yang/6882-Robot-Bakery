@@ -166,7 +166,7 @@ env_motion = RobotKitchenEnv()
 env_relational = RobotKitchenEnvRelationalAction()
 for env in [env_relational, env_motion]:
     print('Using:', env.__class__.__name__)
-    num_problems = 1  # in total three layouts: simple 4 by 4, default 5 by 5, difficult 6 by 7
+    num_problems = 2  # in total three layouts: simple 4 by 4, default 5 by 5, difficult 6 by 7
     for method in methods:
         print(method, '---------------')
         data = np.zeros((num_problems, 4))
@@ -186,7 +186,7 @@ for env in [env_relational, env_motion]:
             # print('     Problem', problem, data[problem])
 
         print()
-        table.loc[method] = data[:]
+        table.loc[method] = data.T.tolist()
         # table.loc[method] = [get_stats(data[:,0]),
         #                      get_stats(data[:,1]),
         #                      get_stats(data[:,2]),
