@@ -13,7 +13,7 @@ import math
 try:
     import jacinle
 except:
-    pas
+    pass
 
 class OBJ_CATS(Enum):
     TABLE = 0
@@ -45,7 +45,12 @@ class RobotKitchenEnv:
     Parameters
     ----------
     layout: np.ndarray, layout.shape = (height, width, num_objects)
-    initial states
+    goal: goal configuration, state attributes
+        goal configuration: bottom-up sequence of type of ingredients
+            e.g., [['D','l','m','D'], ['D','m','l','D']]
+                  i.e., it's ok to put lettuce above or below the meat, but bread is always at top & bottom
+        state attributes: a dictionary of attribute-value pairs that we want to be true
+            e.g., {'carrying': None}, and in the future ('contain', container, contained)
     """
 
     ## Types of objects

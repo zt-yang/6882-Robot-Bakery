@@ -1,6 +1,11 @@
-# 6882-Robot-Kitchen
+# 6882 Robot Kitchen
 
-## Setup
+This is a 2D grid-world Robot Kitchen simulator developed by Jiayuan and Yang for 6.882 Structured Model of Artificial Intelligence.
+
+---
+
+## PSet 1 
+
 Tomas is hungry, and he is ordering a burger from a robotic food manufacturer. That is, they use robots to make burgers for customers. As a simplified version, we consider a discrete, deterministic, and fully-observed environment.
 The environment involves a robot arm (we only consider the end gripper of the robot for simplicity), a table, and ingredients placed on the table. In this question, you will consider a 1-D version of the environment. That is, the table expands only in one dimension.
 
