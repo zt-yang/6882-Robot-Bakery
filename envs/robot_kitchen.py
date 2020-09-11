@@ -33,10 +33,10 @@ for name in [x for x in dir(OBJ_CATS) if not x.startswith('__')]:
 
 try:
     from .layouts import *
-    from .utils import render_from_layout, get_asset_path
+    from .utils import render_from_layout, get_asset_path, animate_images
 except ImportError:
     from layouts import *
-    from utils import render_from_layout, get_asset_path
+    from utils import render_from_layout, get_asset_path, animate_images
 
 class RobotKitchenEnv:
     """A grid world where a robot hand must take out ingredients from containers and
@@ -207,6 +207,15 @@ class RobotKitchenEnv:
     def render_from_state(self, state):
         self.set_state(state)
         return self.render()
+
+    def record_from_trace(self, trace, out_file, dpi=300):
+        """ plot the path on map from trace, which is list of robot positions """
+        images = []
+        for state in trace:
+            self.set_state(state)
+            images.append(self.render(dpi=dpi))
+        animate_images(out_file, images)
+        return out_file
 
     def _init_token_images(self):
         for obj in self.OBJECTS:
@@ -507,9 +516,15 @@ class RobotKitchenEnvRelationalAction(object):
     def reset(self):
         return self.wrapped.reset()
 
+    def render(self, dpi=150):
+        return self.wrapped.render(dpi=dpi)
+
     def render_from_state(self, state):
         self.set_state(state)
         return self.render()
+
+    def record_from_trace(self, trace, out_file, dpi=300):
+        return self.wrapped.record_from_trace(trace, out_file, dpi)
 
     def get_robot_pos(self, state=None):
         return self.wrapped.get_robot_pos(state)
@@ -519,9 +534,6 @@ class RobotKitchenEnvRelationalAction(object):
 
     def get_all_actions(self):
         return self.actions
-
-    def render(self, dpi=150):
-        return self.wrapped.render(dpi=dpi)
 
     def step(self, action, DEBUG = False):
         robot_position = self.wrapped._find_pos_by_obj(ROBOT)
@@ -665,8 +677,9 @@ def test_goal_checking():
 
     env.check_goal()
 
-    outfile = join('tests', "test_goal_checking.mp4")
-    imageio.mimsave(outfile, [env.render(dpi=300)])
+    outfile = join('tests', "test_goal_checking")
+    images = [env.render(dpi=300)]
+    animate_images(outfile, images)
 
 
 def test_steps(DEBUG=True):
@@ -683,8 +696,8 @@ def test_steps(DEBUG=True):
         state, reward, done, _ = env.step(action, DEBUG = DEBUG)
         images.append(env.render(dpi=dpi))
 
-    outfile = join('tests', "test_steps.mp4")
-    imageio.mimsave(outfile, images)
+    outfile = join('tests', "test_steps")
+    animate_images(outfile, images)
 
     return env
 
@@ -739,7 +752,7 @@ def test_custom_layout():
                UP, UP, RIGHT, RIGHT, RIGHT, RIGHT, RIGHT, PUT_DOWN, ## put down the piece of lettuce
                LEFT, DOWN, PICK_UP, ## pick up the second piece of meat
                UP, UP, RIGHT, PUT_DOWN, ## put down the second piece of meat
-               LEFT, LEFT, DOWN, DOWN, PICK_UP, ## pick up the upper bread
+               LEFT, LEFT, DOWN, DOWN, DOWN, PICK_UP, ## pick up the upper bread
                UP, UP, UP, UP, RIGHT, RIGHT, PUT_DOWN] ## put down the upper bread
 
     images = []
@@ -749,8 +762,8 @@ def test_custom_layout():
         state, reward, done, _ = env.step(action, DEBUG = True)
         images.append(env.render(dpi=dpi))
 
-    outfile = join('tests', "test_custom_layout.mp4")
-    imageio.mimsave(outfile, images)
+    outfile = join('tests', "test_custom_layout")
+    animate_images(outfile, images)
 
 
 def test_simple_layout():
@@ -772,8 +785,8 @@ def test_simple_layout():
         state, reward, done, _ = env.step(action, DEBUG=True)
         images.append(env.render(dpi=dpi))
 
-    outfile = join('tests', "test_simple_layout.mp4")
-    imageio.mimsave(outfile, images)
+    outfile = join('tests', "test_simple_layout")
+    animate_images(outfile, images)
 
 
 # Section 2: test for the relational task planning setting.
@@ -794,10 +807,11 @@ def test_steps_relational():
         print(env.state_to_str(state))
         images.append(env.render(dpi=dpi))
 
-    outfile = join('tests', "test_steps_relational.mp4")
-    imageio.mimsave(outfile, images)
+    outfile = join('tests', "test_steps_relational")
+    animate_images(outfile, images)
 
 if __name__ == "__main__":
+    """ the following test cases helps you understand the basic functions of the environment """
 
     ## test state representation
     # test_get_state()
@@ -811,8 +825,9 @@ if __name__ == "__main__":
     ## given custom layout and goal configuration, test environment initialization()
     # test_custom_layout()
 
-    ## given a simple layout for testing search algorithms
-    # test_simple_layout()
+    ## using the simple layout defined in layout.py
+    test_simple_layout()
 
-    test_steps_relational()
+    ## test for the relational task planning setting.
+    # test_steps_relational()
 

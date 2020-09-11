@@ -30,7 +30,7 @@ class Node:
 def get_stats(sample):
     return round(statistics.mean(sample),2), round(statistics.variance(sample),2)
 
-def extract_path(current_node, env=None, name=None):
+def extract_path(current_node, env=None, out_file=None):
     path = []
     actions = []
     while current_node.parent != None:
@@ -46,8 +46,8 @@ def extract_path(current_node, env=None, name=None):
     #     print(s, a)
     # print(path[-1])
 
-    record_trace(path, env, name)
-    draw_trace(path, env)
+    env.record_from_trace(path, out_file)
+    # draw_trace(path, env)
     return len(path)
 
 def plan(env, method, output_file_name=None):
@@ -108,7 +108,7 @@ def plan(env, method, output_file_name=None):
                 if time.time() - start_time > timeout: success_rate = 0
                 time_taken = time.time() - start_time
                 nodes_expanded = len(visited_list)
-                steps_in_env = extract_path(current_node, env=env, name=output_file_name)
+                steps_in_env = extract_path(current_node, env=env, out_file=output_file_name)
 
                 return success_rate, time_taken, nodes_expanded, steps_in_env
 
@@ -164,6 +164,7 @@ table = pd.DataFrame(index=methods,
 
 env_motion = RobotKitchenEnv()
 env_relational = RobotKitchenEnvRelationalAction()
+env_chars = {env_motion: 'M', env_relational: 'R'}
 for env in [env_relational, env_motion]:
     print('Using:', env.__class__.__name__)
     num_problems = 2  # in total three layouts: simple 4 by 4, default 5 by 5, difficult 6 by 7
@@ -175,15 +176,16 @@ for env in [env_relational, env_motion]:
             ## initiate the environment
             env.fix_problem_index(problem)
             state, _ = env.reset()
-            name = "P"+str(problem)+", "+str(method)
+            name = f"{env_chars[env]}{problem}_{method}"
 
             display_image(env.render_from_state(state), name)
-            data[problem] = plan(env, method, output_file_name=name)  ## [1,1,1,1]
+            data[problem] = plan(env, method, output_file_name=join('tests', name))  ## [1,1,1,1]
+            # print('     Problem', problem, data[problem])
+
+            ## generate the trace of the plan
             png_filename = join('tests',env.__class__.__name__, name+'.png')
             os.makedirs(os.path.dirname(png_filename), exist_ok=True)
             plt.savefig(png_filename)
-
-            # print('     Problem', problem, data[problem])
 
         print()
         table.loc[method] = data.T.tolist()

@@ -11,6 +11,18 @@ import math
 
 IM_SCALE = 0.25
 
+def animate_images(file_name, images, format='GIF'):
+    if format.lower() not in file_name[file_name.rfind("."):]:
+        if '.' in format: file_name = file_name[:file_name.rfind(".")]
+        file_name += '.'+ format.lower()
+
+    if format=='MP4':
+        imageio.mimsave(file_name, images)
+    elif format=='GIF':
+        img, *imgs = images
+        img.save(fp=file_name, format=format, append_images=imgs,
+                 save_all=True, duration=200, loop=0)
+
 
 def get_asset_path(asset_name):
     dir_path = os.path.dirname(os.path.realpath(__file__))
@@ -71,7 +83,7 @@ def render_from_layout(layout, get_token_images, dpi=150): #, draw_trace=False
     im = Image.fromarray(im)
     new_width, new_height = (int(im.size[0] * IM_SCALE), int(im.size[1] * IM_SCALE))
     im = im.resize((new_width, new_height), Image.ANTIALIAS)
-    im = np.array(im)
+    # im = np.array(im)
 
     return im
 
