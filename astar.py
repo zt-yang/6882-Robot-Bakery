@@ -5,12 +5,13 @@ import numpy as np
 import time
 import math
 import pandas as pd
+import datetime
 import os
 from os.path import join
 from envs.utils import draw_trace, record_trace, display_image
 pd.set_option('display.max_columns', None)
 
-from envs.robot_kitchen import RobotKitchenEnv, RobotKitchenEnvRelationalAction
+from envs.robot_kitchen import RobotKitchenEnv, RobotKitchenEnvRelationalAction, repair_suffix
 
 class Node:
     """ A node class for A*/BFS """
@@ -53,7 +54,7 @@ def extract_path(current_node, env=None, out_file=None):
 def plan(env, method, output_file_name=None):
 
     DEBUG = False
-    timeout = 5
+    timeout = 10
     action_cost = 0.1
     start_time = time.time()
     state, _ = env.reset()
@@ -68,7 +69,7 @@ def plan(env, method, output_file_name=None):
             # goal_satisfied = env.check_goal(next_state)
             if done or time.time() - start_time > timeout: break
         draw_trace(trace)
-        return done, time.time() - start_time, -1, step + 1
+        return done, round(time.time() - start_time, 3), -1, step + 1
 
     ## otherwise, it's a search problem
     else:
@@ -106,7 +107,7 @@ def plan(env, method, output_file_name=None):
             if env.check_goal(state) or time.time() - start_time > timeout:
                 success_rate = 1
                 if time.time() - start_time > timeout: success_rate = 0
-                time_taken = time.time() - start_time
+                time_taken = round(time.time() - start_time, 3)
                 nodes_expanded = len(visited_list)
                 steps_in_env = extract_path(current_node, env=env, out_file=output_file_name)
 
@@ -157,6 +158,16 @@ def plan(env, method, output_file_name=None):
                 # Add the child to the yet_to_visit list
                 yet_to_visit_list.append(child)
 
+def log(to_print, TXT):
+    TXT.write(to_print+'\n')
+    print(to_print)
+    return TXT
+
+test_folder = join('tests', datetime.datetime.now().strftime("%m-%d-%H-%M-%S"))
+os.mkdir(test_folder)
+
+TXT = open(repair_suffix(join(test_folder, 'test_statistics'), 'txt'), "w")
+
 methods = ["A*Uniform", "A*Custom", "GBFCustom"] # ,"random", "A*Uniform", "A*Custom", "GBFCustom"
 
 table = pd.DataFrame(index=methods,
@@ -166,33 +177,41 @@ env_motion = RobotKitchenEnv()
 env_relational = RobotKitchenEnvRelationalAction()
 env_chars = {env_motion: 'M', env_relational: 'R'}
 for env in [env_relational, env_motion]:
-    print('Using:', env.__class__.__name__)
+    log(f'Environment: {env.__class__.__name__}\n', TXT)
     num_problems = 2  # in total three layouts: simple 4 by 4, default 5 by 5, difficult 6 by 7
     for method in methods:
-        print(method, '---------------')
+        log(f'---- Method: {method} --------', TXT)
         data = np.zeros((num_problems, 4))
 
         for problem in range(num_problems):
+
             ## initiate the environment
             env.fix_problem_index(problem)
             state, _ = env.reset()
             name = f"{env_chars[env]}{problem}_{method}"
 
             display_image(env.render_from_state(state), name)
-            data[problem] = plan(env, method, output_file_name=join('tests', name))  ## [1,1,1,1]
-            # print('     Problem', problem, data[problem])
+
+            output_file = join(test_folder, name)
+            data[problem] = plan(env, method, output_file)  ## [1,1,1,1]
+            log(f'          Problem: {problem} |  Stats: {data[problem]}', TXT)
+
+            ## output the final state as a txt, for checking the goal configuration
+            env.problem_to_json(output_file)
 
             ## generate the trace of the plan
-            png_filename = join('tests',env.__class__.__name__, name+'.png')
+            png_filename = join(test_folder ,env.__class__.__name__, name+'.png')
             os.makedirs(os.path.dirname(png_filename), exist_ok=True)
             plt.savefig(png_filename)
 
+        # table.loc[method] = data.T.tolist()
+        table.loc[method] = [get_stats(data[:,0]),
+                             get_stats(data[:,1]),
+                             get_stats(data[:,2]),
+                             get_stats(data[:,3])]
         print()
-        table.loc[method] = data.T.tolist()
-        # table.loc[method] = [get_stats(data[:,0]),
-        #                      get_stats(data[:,1]),
-        #                      get_stats(data[:,2]),
-        #                      get_stats(data[:,3])]
 
-    print('-----------------------------------')
-    print(table)
+    log('-----------------------------------', TXT)
+    log(str(table)+'\n\n', TXT)
+
+TXT.close()

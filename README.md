@@ -2,6 +2,7 @@
 
 This is a 2D grid-world Robot Kitchen simulator developed by Jiayuan and Yang for 6.882 Structured Model of Artificial Intelligence.
 
+The codes for environment is adapted from Tom Silver's [watering quenching environment](https://github.com/MIT-6-882/Lecture-Code)
 ---
 
 ## PSet 1 

@@ -115,5 +115,7 @@ def test_OBJ_CATS():
         globals()[name] = getattr(OBJ_CATS, name)
     print(ROBOT)
 
+
+
 if __name__ == "__main__":
     test_OBJ_CATS()

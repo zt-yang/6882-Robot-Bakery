@@ -11,10 +11,14 @@ import math
 
 IM_SCALE = 0.25
 
+def repair_suffix(file_name, suffice):
+    if suffice.lower() not in file_name[file_name.rfind("."):]:
+        if '.' in suffice: file_name = file_name[:file_name.rfind(".")]
+        file_name += '.'+ suffice.lower()
+    return file_name
+
 def animate_images(file_name, images, format='GIF'):
-    if format.lower() not in file_name[file_name.rfind("."):]:
-        if '.' in format: file_name = file_name[:file_name.rfind(".")]
-        file_name += '.'+ format.lower()
+    file_name = repair_suffix(file_name, format)
 
     if format=='MP4':
         imageio.mimsave(file_name, images)
@@ -22,7 +26,6 @@ def animate_images(file_name, images, format='GIF'):
         img, *imgs = images
         img.save(fp=file_name, format=format, append_images=imgs,
                  save_all=True, duration=200, loop=0)
-
 
 def get_asset_path(asset_name):
     dir_path = os.path.dirname(os.path.realpath(__file__))

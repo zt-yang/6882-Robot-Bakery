@@ -3,12 +3,14 @@ import matplotlib.pyplot as plt
 import imageio
 import functools
 import time
-from os.path import join
 from tqdm import tqdm
 from enum import Enum
 import random
 import copy
 import math
+from os import listdir
+from os.path import isfile, join
+import json
 
 try:
     import jacinle
@@ -33,10 +35,10 @@ for name in [x for x in dir(OBJ_CATS) if not x.startswith('__')]:
 
 try:
     from .layouts import *
-    from .utils import render_from_layout, get_asset_path, animate_images
+    from .utils import render_from_layout, get_asset_path, animate_images, repair_suffix
 except ImportError:
     from layouts import *
-    from utils import render_from_layout, get_asset_path, animate_images
+    from utils import render_from_layout, get_asset_path, animate_images, repair_suffix
 
 class RobotKitchenEnv:
     """A grid world where a robot hand must take out ingredients from containers and
@@ -94,9 +96,10 @@ class RobotKitchenEnv:
     REWARD_GOAL = 1
     MAX_REWARD = max(REWARD_GOAL, REWARD_SUBGOAL)
 
-    def __init__(self, layout=None, goal=None, mode='default'):
+    def __init__(self, layout=None, goal=None, mode='default', txt=None):
         if layout is None:
             layout, goal = self._get_layout_from_mode(mode)
+
         self._initial_layout = layout
         self._layout = layout.copy()
         self._visible_objects = self._init_visible_objects()
@@ -107,7 +110,7 @@ class RobotKitchenEnv:
 
         ## relation attributes such as carrying and containing
         self._attributes_in_state = ['carrying']    ## only some attributes are in the state space
-        self._attributes = self.check_attributes()
+        self._attributes = self.check_attributes()    ## only for initialization
 
         self._init_token_images()
 
@@ -132,6 +135,38 @@ class RobotKitchenEnv:
             raise Exception("Unrecognized mode.")
         return layout, goal
 
+    def _shuffle_layout(self):
+        """ shuffle the positions of objects on the table and the robot """
+        shape = self._layout.shape
+        self._layout = np.zeros((shape[0], shape[1], len(OBJECTS)), dtype=bool)
+        rob_c = random.randint(0, shape[1])
+
+        ## get object blocks to shuffle
+        objects = self._visible_objects
+        objects.remove(ROBOT)
+        for container, contained in self._attributes['containing'].items():
+            for obj in contained:
+                objects.remove(obj)
+        block_to_put = len(objects)
+
+        blocks = np.zeros(shape[1])
+        while block_to_put > 0:
+            bin = random.randint(0, shape[1])
+            if blocks[bin] < shape[0]:
+                ## reserve a block space for robot
+                if bin == rob_c and blocks[bin] == shape[0] - 1:
+                    continue
+                ## take a random object from object list and move to that position
+                object = random.choice(objects)
+                objects.remove(object)
+                self._move_obj_to(object, (blocks[bin], bin))
+                blocks[bin] += 1
+
+        ## move robot to the top of a random column
+        self._move_obj_to(ROBOT, (0, rob_c))
+        self._initial_layout = self._layout
+        self.reset()
+
     def fix_problem_index(self, num):
         layout, goal = self._get_layout_from_mode(num)
         self._initial_layout = layout
@@ -146,11 +181,13 @@ class RobotKitchenEnv:
         if len(containers) != 0: return containers[0]
         return None
 
-    def _get_contained(self, objects):
+    def _get_non_container_obj(self, objects):
         """ given all objects in a grid,
             return the list of objects inside the container or out in th air """
-        contained = [o for o in objects if self.OBJECT_CHARS[o] not in self.CONTAINERS]
-        if len(contained) != 0: return contained
+        free_obj = [o for o in objects if self.OBJECT_CHARS[o] not in self.CONTAINERS]
+        if len(free_obj) != 0:
+            if ROBOT in free_obj: free_obj.remove(ROBOT)
+            return free_obj
         return [None]
 
     def check_attributes(self):
@@ -163,7 +200,7 @@ class RobotKitchenEnv:
         rows, cols = np.nonzero(np.sum(self._layout, axis=2) > 1)
         for i in range(len(rows)):
             objects = self._get_objs_in_pos((rows[i], cols[i]))
-            contained = self._get_contained(objects)
+            contained = self._get_non_container_obj(objects)
             container = self._get_container(objects)
             if container!=None:
                 if self.OBJECT_CHARS[container] == 'R':
@@ -217,6 +254,23 @@ class RobotKitchenEnv:
         animate_images(out_file, images)
         return out_file
 
+    def problem_to_json(self, out_file):
+        data = {
+            'shape': self._layout.shape,
+            'goal': (self._goal, self._goal_attributes),
+            'state': str(self.get_state()),
+        }
+        out_file = repair_suffix(out_file,'JSON')
+        with open(out_file, 'w') as out_file:
+            json.dump(data, out_file)
+
+    def init_problem_from_json(self, in_file):
+        data = json.load(open(in_file, 'r'))
+        shape = data['shape']
+        self._layout = np.zeros((shape[0], shape[1], len(OBJECTS)), dtype=bool)
+        self._goal, self._goal_attributes = data['goal']
+        return self.set_state(eval(data['state']))
+
     def _init_token_images(self):
         for obj in self.OBJECTS:
             self.TOKEN_IMAGES[obj.value] = plt.imread(get_asset_path(str(self.NAMES[obj.value]) + '.png'))
@@ -250,11 +304,74 @@ class RobotKitchenEnv:
         self.set_state(state)
         return self._find_pos_by_obj(ROBOT)
 
+    def _set_robot_carrying(self, obj):
+        if obj not in [ROBOT, TABLE] and self._attributes['carrying'] == None:
+            self._attributes['carrying'] = obj
+
+            ## objects in a container will no longer be in container
+            self._stop_obj_contained(obj)
+
+    def _stop_robot_carrying(self):
+        """ make the robot release the object it's carrying
+            return the object that is containing or supporting the released object
+        """
+
+        ## cannot releasing an object in the air, for the moment
+        rob_pos = self.get_robot_pos()
+        objects_below = self._get_obj_below_pos(rob_pos)
+        if len(objects_below) == 0: return None
+
+        obj = self._attributes['carrying']
+        if obj != None:
+            self._attributes['carrying'] = None
+
+            ## the object is now contained if there exists a container
+            objects = self._get_objs_in_pos(rob_pos)
+            container = self._get_container(objects)
+            if container and container != obj:
+                self._set_obj_contain(container, obj)
+
+        return obj
+
+    def _stop_obj_contained(self, contained):
+        """ a contained object is no longer contained """
+        if contained in self._attributes['contained']:
+            container = self._attributes['contained'][contained]
+            self._attributes['contained'].pop(contained)
+            self._attributes['containing'][container].remove(contained)
+            if len(self._attributes['containing'][container]) == 0:
+                self._attributes['containing'].pop(container)
+
+    def _set_obj_contain(self, container, contained):
+        """ a container object starts to contain another object """
+        if container == contained: return
+        if container not in self._attributes['containing']:
+            self._attributes['containing'][container] = []
+        if contained not in self._attributes['containing'][container]:
+            self._attributes['containing'][container].append(contained)
+            self._attributes['contained'][contained] = container
+
     def _move_obj_from_to(self, obj, ori, des):
+
+        print(ori)
         # Remove old object
-        self._layout[ori[0], ori[1], obj] = 0
+        if len(ori) == 2:
+            self._layout[ori[0], ori[1], obj] = 0
+
         # Add new object
         self._layout[des[0], des[1], obj] = 1
+
+        ## objects carried by the robot move together with it
+        if obj == ROBOT:
+            ## the things that robot carries will move with it
+            if self._attributes['carrying'] != None:
+                object = self._attributes['carrying']
+                self._move_obj_from_to(object, ori, des)
+
+        ## objects in a container move together with it
+        if obj in self._attributes['containing']:
+            for carried_object in self._attributes['containing'][obj]:
+                self._move_obj_from_to(carried_object, ori, des)
 
     def _move_obj_to(self, obj, des):
         self._move_obj_from_to(obj, self._find_pos_by_obj(obj), des)
@@ -297,6 +414,32 @@ class RobotKitchenEnv:
     def _get_obj_below_obj(self, obj):
         return self._get_obj_below_pos(self._find_pos_by_obj(obj))
 
+    def _can_move_to_pos(self, new_pos, action):
+        new_r, new_c = new_pos
+
+        ## cannot move outside the box
+        if new_r<0 or new_r>=self._layout.shape[0] or new_c<0 or new_c >= self._layout.shape[1]: return False
+
+        ## there cannot be objects above the position
+        if len(self._get_obj_above_pos(new_pos)) != 0: return False
+
+        ## cannot move to table
+        objects = self._get_objs_in_pos(new_pos)
+        if TABLE in objects: return False
+
+        ## if the robot is carrying stuff, there cannot be not contained object in new_pos
+        if self._attributes['carrying'] != None:
+            if self._get_container(objects) == None:
+                free_objects = self._get_non_container_obj(objects)
+                if None not in free_objects: return False
+
+        ## if robot is inside a container (not carrying it), the robot can only move up
+        container = self._get_container(self._get_objs_in_pos(self.get_robot_pos()))
+        if container != None:
+            if container != self._attributes['carrying'] and action != UP: return False
+
+        return True
+
     def step(self, action, DEBUG=False, STEP=True):
 
         # Start out reward at 0
@@ -308,84 +451,42 @@ class RobotKitchenEnv:
 
             dr, dc = {self.UP : (-1, 0), self.DOWN : (1, 0),
                       self.LEFT : (0, -1), self.RIGHT : (0, 1)}[action]
-            new_pos = new_r, new_c = rob_r + dr, rob_c + dc
-            if 0 <= new_r < self._layout.shape[0] and 0 <= new_c < self._layout.shape[1]:
+            new_pos = rob_r + dr, rob_c + dc
 
-                if len(self._get_obj_above_pos(new_pos)) == 0:
-
-                    if TABLE not in self._get_objs_in_pos(new_pos):
-
-                        self._move_obj_from_to(ROBOT, rob_pos, new_pos)
-                        if DEBUG: print('move to', new_pos)
-
-                        if self._attributes['carrying'] != None:
-                            object = self._attributes['carrying']
-                            self._move_obj_from_to(object, rob_pos, new_pos)
-
-                            ## if we are moving a container
-                            if object in self._attributes['containing']:
-                                for carried_object in self._attributes['containing'][object]:
-                                    self._move_obj_from_to(carried_object, rob_pos, new_pos)
-                    else:
-                        if DEBUG: print('unable to move to', new_pos, ' table')
-                else:
-                    if DEBUG: print('unable to move to', new_pos, ' because there are objects above the robot')
-            else:
-                if DEBUG: print('unable to move to', new_pos, ' because it is out of bound')
+            if self._can_move_to_pos(new_pos, action):
+                self._move_obj_from_to(ROBOT, rob_pos, new_pos)
 
 
         elif action in [self.PICK_UP, self.PICK_UP_CONTAINER]:  ## only valid if there exists object to pick up
 
-            if len(self._get_obj_above_pos(rob_pos)) == 0:
-                ## Carry the object if there is any in the new grid
-                objects = self._get_objs_in_pos(rob_pos)
-                objects.remove(ROBOT)
-                if len(objects) > 0:
+            ## Carry the object if there is any in the new grid
+            objects = self._get_objs_in_pos(rob_pos)
+            objects.remove(ROBOT)
+            if len(objects) > 0:
 
-                    if action == self.PICK_UP_CONTAINER:
-                        object = self._get_container(objects)
-                    else: ## otherwise pick up the object with smaller index
-                        object = self._get_contained(objects)[0]
+                ## choose which object to pick
+                if action == self.PICK_UP_CONTAINER:
+                    object = self._get_container(objects)
+                elif action == self.PICK_UP:
+                    ## otherwise pick up the object with smaller index
+                    object = self._get_non_container_obj(objects)[0]
 
-                    if object:
-                        self._attributes['carrying'] = object
-                        if DEBUG: print('start carrying', self.NAMES[object])
-                        if object in self._attributes['contained']:
-                            container = self._attributes['contained'][object]
-                            self._attributes['containing'][container].remove(object)
-                            self._attributes['contained'].pop(object)
+                if object != None:
+                    self._set_robot_carrying(object)
 
-                        ## get reward for picking up objects appeared in goal configuration
-                        if object in self._goal_objects:
-                            reward += self.REWARD_SUBGOAL
-            else:
-                if DEBUG: print('unable to pick up because there are objects above the robot')
+                    ## get reward for picking up objects appeared in goal configuration
+                    if object in self._goal_objects:
+                        reward += self.REWARD_SUBGOAL
 
 
         elif action == self.PUT_DOWN:  ## only valid if there is an object in robot hand
 
-            objects_below = self._get_obj_below_pos(rob_pos)
-            if len(objects_below) > 0:
+            support_object = self._stop_robot_carrying()
 
-                object = self._attributes['carrying']
-                if object!=None:
-                    self._attributes['carrying'] = None
-                    if DEBUG: print('stop carrying', self.NAMES[object])
+            ## get reward for putting on objects appeared in goal configuration
+            if support_object in self._goal_objects:
+                reward += self.REWARD_SUBGOAL
 
-                    ## the object is now contained if there exists a container
-                    objects = self._get_objs_in_pos(rob_pos)
-                    container = self._get_container(objects)
-                    if container:
-                        if container not in self._attributes['containing']:
-                            self._attributes['containing'][container] = []
-                        self._attributes['containing'][container].append(object)
-                        self._attributes['contained'][object] = container
-
-                        ## get reward for picking up objects appeared in goal configuration
-                        if objects_below[0] in self._goal_objects:
-                            reward += self.REWARD_SUBGOAL
-            else:
-                if DEBUG: print('unable to put down because there are not any objects below the robot')
 
         ## Check done: all people quenched
         done = self.check_goal()
@@ -414,9 +515,10 @@ class RobotKitchenEnv:
             self._layout = np.zeros_like(self._initial_layout)
             for i, j, k in self._get_state_var('layout', state):
                 self._layout[i, j, k] = 1
-            self.check_attributes()
+            # self.check_attributes()
             for attribute in self._attributes_in_state:
                 self._attributes[attribute] = self._get_state_var(attribute, state)
+        return state
 
     def state_to_str(self, state=None):
         if state==None: state=self.get_state()
@@ -470,10 +572,7 @@ class RobotKitchenEnv:
                 if found: return start_index+count_index
             return None
 
-        if state:
-            self.set_state(state)
-        else:
-            state = self.get_state()
+        if state: self.set_state(state)
 
         ## all attributes in state must match goal attribute state
         for attribute in self._attributes_in_state:
@@ -486,7 +585,7 @@ class RobotKitchenEnv:
             for goal in self._goal:
                 row = subfinder(config, goal)
                 if row != None:
-                    print('!! achieved goal', goal, 'at pos', (row, col))
+                    # print('!! achieved goal', goal, 'at pos', (row, col))
                     return True
         return False
 
@@ -526,6 +625,12 @@ class RobotKitchenEnvRelationalAction(object):
     def record_from_trace(self, trace, out_file, dpi=300):
         return self.wrapped.record_from_trace(trace, out_file, dpi)
 
+    def problem_to_json(self, out_file):
+        self.wrapped.problem_to_json(out_file)
+
+    def init_problem_from_json(self, in_file):
+        return self.wrapped.init_problem_from_json(in_file)
+
     def get_robot_pos(self, state=None):
         return self.wrapped.get_robot_pos(state)
 
@@ -544,16 +649,19 @@ class RobotKitchenEnvRelationalAction(object):
         action_cat, action_obj = action
         if action_cat == self.PICK_UP:
             if self.wrapped._attributes['carrying'] is None and not _check_empty(self.wrapped._find_pos_by_obj(action_obj)):
-                if _check_empty(self.wrapped._get_obj_above_obj(action_obj)):
-                    self.wrapped._move_obj_to(ROBOT, self.wrapped._find_pos_by_obj(action_obj))
-
-                    self.wrapped._attributes['carrying'] = action_obj
-                    if action_obj in self.wrapped._attributes['contained']:
-                        container = self.wrapped._attributes['contained'][action_obj]
-                        self.wrapped._attributes['containing'][container].remove(action_obj)
-                        self.wrapped._attributes['contained'].pop(action_obj)
+                self.wrapped._move_obj_to(ROBOT, self.wrapped._find_pos_by_obj(action_obj))
+                self.wrapped._set_robot_carrying(action_obj) ## TODO: Test if this works
+                # if _check_empty(self.wrapped._get_obj_above_obj(action_obj)):
+                #     self.wrapped._move_obj_to(ROBOT, self.wrapped._find_pos_by_obj(action_obj))
+                #
+                #     self.wrapped._attributes['carrying'] = action_obj
+                #     if action_obj in self.wrapped._attributes['contained']:
+                #         container = self.wrapped._attributes['contained'][action_obj]
+                #         self.wrapped._attributes['containing'][container].remove(action_obj)
+                #         self.wrapped._attributes['contained'].pop(action_obj)
 
         elif action_cat == self.PLACE_ON:
+
             object = self.wrapped._attributes['carrying']
             if object is not None:
                 if action_obj == TABLE:
@@ -584,25 +692,26 @@ class RobotKitchenEnvRelationalAction(object):
         return self.get_state(), reward, done, {}
 
     def _step_place_on(self, tgt_r, tgt_c):
-        object = self.wrapped._attributes['carrying']
-        if object is not None:
-            self.wrapped._move_obj_to(object, (tgt_r, tgt_c))
+        # object = self.wrapped._attributes['carrying']
+        # if object is not None:
+        #     self.wrapped._move_obj_to(object, (tgt_r, tgt_c))
         self.wrapped._move_obj_to(ROBOT, (tgt_r, tgt_c))
+        self.wrapped._stop_robot_carrying()  ## TODO: Test if this works
 
-        objects_below = self.wrapped._get_obj_below_pos((tgt_r, tgt_c))
-        if len(objects_below) > 0:
-            object = self.wrapped._attributes['carrying']
-            if object:
-                self.wrapped._attributes['carrying'] = None
-
-                ## the object is now contained if there exists a container
-                objects = self.wrapped._get_objs_in_pos((tgt_r, tgt_c))
-                container = self.wrapped._get_container(objects)
-                if container:
-                    if container not in self.wrapped._attributes['containing']:
-                        self.wrapped._attributes['containing'][container] = []
-                    self.wrapped._attributes['containing'][container].append(object)
-                    self.wrapped._attributes['contained'][object] = container
+        # objects_below = self.wrapped._get_obj_below_pos((tgt_r, tgt_c))
+        # if len(objects_below) > 0:
+        #     object = self.wrapped._attributes['carrying']
+        #     if object:
+        #         self.wrapped._attributes['carrying'] = None
+        #
+        #         ## the object is now contained if there exists a container
+        #         objects = self.wrapped._get_objs_in_pos((tgt_r, tgt_c))
+        #         container = self.wrapped._get_container(objects)
+        #         if container:
+        #             if container not in self.wrapped._attributes['containing']:
+        #                 self.wrapped._attributes['containing'][container] = []
+        #             self.wrapped._attributes['containing'][container].append(object)
+        #             self.wrapped._attributes['contained'][object] = container
 
     def get_state(self):
         return self.wrapped.get_state()
@@ -687,7 +796,10 @@ def test_steps(DEBUG=True):
     env = RobotKitchenEnv()
 
     ## some actions are invalid, check if the corresponding warning messages are printed out
-    actions = [DOWN, DOWN, PICK_UP, DOWN, RIGHT, RIGHT, RIGHT, RIGHT, PUT_DOWN, LEFT, LEFT, LEFT, LEFT, PICK_UP_CONTAINER, RIGHT, DOWN, PUT_DOWN]
+    actions = [DOWN, DOWN, PICK_UP, DOWN,
+               UP, RIGHT, RIGHT, RIGHT, RIGHT, DOWN, PUT_DOWN,
+               UP, LEFT, LEFT, LEFT, LEFT, DOWN, PICK_UP_CONTAINER,
+               RIGHT, DOWN, PUT_DOWN]
 
     images = []
     state, _ = env.reset()
@@ -747,8 +859,8 @@ def test_custom_layout():
     ## all actions are valid, you can add invalid ones inside to try
     actions = [RIGHT, DOWN, DOWN, DOWN, DOWN, PICK_UP_CONTAINER, ## pick up the box of meat
                UP, RIGHT, RIGHT, RIGHT, PUT_DOWN, ## put the box of meat next to the target base bread
-               PICK_UP, RIGHT, PUT_DOWN, ## put down the first piece of meat
-               LEFT, LEFT, LEFT, LEFT, LEFT, DOWN, PICK_UP, ## pick up a piece of lettuce
+               PICK_UP, UP, RIGHT, DOWN, PUT_DOWN, ## put down the first piece of meat
+               UP, LEFT, LEFT, LEFT, LEFT, LEFT, DOWN, DOWN, PICK_UP, ## pick up a piece of lettuce
                UP, UP, RIGHT, RIGHT, RIGHT, RIGHT, RIGHT, PUT_DOWN, ## put down the piece of lettuce
                LEFT, DOWN, PICK_UP, ## pick up the second piece of meat
                UP, UP, RIGHT, PUT_DOWN, ## put down the second piece of meat
@@ -791,7 +903,6 @@ def test_simple_layout():
 
 # Section 2: test for the relational task planning setting.
 
-
 def test_steps_relational():
     dpi = 300
     env = RobotKitchenEnvRelationalAction()
@@ -801,17 +912,57 @@ def test_steps_relational():
 
     images = []
     state, _ = env.reset()
+    # print(env.state_to_str(state))
+    # print(state)
     images.append(env.render(dpi=dpi))
+
     for action in tqdm(actions):
         state, reward, done, _ = env.step(action, DEBUG = True)
-        print(env.state_to_str(state))
+        # print(env.state_to_str(state))
+        # print(state)
         images.append(env.render(dpi=dpi))
 
     outfile = join('tests', "test_steps_relational")
     animate_images(outfile, images)
 
+def test_problem_from_json():
+    json_file = join('tests', 'test_problem_from_json.json')
+
+    env = RobotKitchenEnvRelationalAction()
+    trace = [
+        env.get_state(),
+        env.step((env.PICK_UP, MEAT1))[0],
+    ]
+
+    env.problem_to_json(json_file)
+    # env.state_to_txt(txt_name)
+    trace.extend([
+        env.step((env.PLACE_ON, BREAD4))[0],
+        env.init_problem_from_json(json_file),
+    ])
+
+    outfile = join('tests', 'test_problem_from_json')
+    env.record_from_trace(trace, outfile)
+
+def test_checking_goals_from_json():
+    mypath = "tests"
+    files = [join(mypath, f) for f in listdir(mypath) if isfile(join(mypath, f)) and '.txt' in str(f)]
+    for file_path in files:
+        print(file_path)
+        env = RobotKitchenEnv(txt=file_path)
+        env.check_goal()
+
+def test_shuffle_layout():
+    env = RobotKitchenEnv(mode='simple')
+    frames = [env.get_state()]
+    for i in range(10):
+        frames.append(env._shuffle_layout())
+    env.record_from_trace(frames, join('tests', 'test_shuffle_layout'))
+
 if __name__ == "__main__":
     """ the following test cases helps you understand the basic functions of the environment """
+
+    ## ------------ RobotKitchenEnv()
 
     ## test state representation
     # test_get_state()
@@ -826,8 +977,20 @@ if __name__ == "__main__":
     # test_custom_layout()
 
     ## using the simple layout defined in layout.py
-    test_simple_layout()
+    # test_simple_layout()
+
+    ## shuffle objects on the table
+    test_shuffle_layout()
+
+
+
+    ## ------------ RobotKitchenEnvRelationalAction()
 
     ## test for the relational task planning setting.
     # test_steps_relational()
 
+    ## generate and reset with state txt file
+    # test_problem_from_json()
+
+    ## check if a list of txt files meet the goal
+    # test_checking_goals_from_json()
