@@ -96,7 +96,7 @@ class RobotKitchenEnv:
     REWARD_GOAL = 1
     MAX_REWARD = max(REWARD_GOAL, REWARD_SUBGOAL)
 
-    def __init__(self, layout=None, goal=None, mode='default', txt=None):
+    def __init__(self, layout=None, goal=None, mode='default'):
         if layout is None:
             layout, goal = self._get_layout_from_mode(mode)
 
@@ -116,6 +116,7 @@ class RobotKitchenEnv:
 
     def reset(self):
         self._layout = self._initial_layout.copy()
+        self._visible_objects = self._init_visible_objects()
         self._attributes = self.check_attributes()
         return self.get_state(), {}
 
@@ -138,34 +139,56 @@ class RobotKitchenEnv:
     def _shuffle_layout(self):
         """ shuffle the positions of objects on the table and the robot """
         shape = self._layout.shape
+
+        def random_col():
+            return random.randint(0, shape[1]-1)
+
+        ## clear all objects except for tables
+        table_pos = self._find_all_pos_by_obj(TABLE)
         self._layout = np.zeros((shape[0], shape[1], len(OBJECTS)), dtype=bool)
-        rob_c = random.randint(0, shape[1])
+        for row, col in table_pos:
+            self._layout[row, col, TABLE] = 1
+
+        ## select a column to put robot arm
+        rob_c = random_col()
 
         ## get object blocks to shuffle
         objects = self._visible_objects
         objects.remove(ROBOT)
+        objects.remove(TABLE)
         for container, contained in self._attributes['containing'].items():
             for obj in contained:
                 objects.remove(obj)
-        block_to_put = len(objects)
 
-        blocks = np.zeros(shape[1])
-        while block_to_put > 0:
-            bin = random.randint(0, shape[1])
-            if blocks[bin] < shape[0]:
-                ## reserve a block space for robot
-                if bin == rob_c and blocks[bin] == shape[0] - 1:
-                    continue
+        blocks = np.zeros(shape[1], dtype=int)
+        while len(objects) > 0:
+            bin = random_col()
+
+            ## can put objects between table and one block away from ceiling
+            if blocks[bin] < shape[0] - 2:
                 ## take a random object from object list and move to that position
                 object = random.choice(objects)
                 objects.remove(object)
-                self._move_obj_to(object, (blocks[bin], bin))
+                self._move_obj_to(object, (shape[0]-2-blocks[bin], bin))
                 blocks[bin] += 1
 
         ## move robot to the top of a random column
         self._move_obj_to(ROBOT, (0, rob_c))
+        self.state_to_str()
         self._initial_layout = self._layout
-        self.reset()
+
+        return self.reset()[0]
+
+    def make_shuffled_layouts(self, num_layouts, out_prefix):
+        """ shuffle n times and return the list of problem json files for each """
+        out_files = []
+        for i in range(num_layouts):
+            out_file = out_prefix + str(i) + '.json'
+            self._shuffle_layout()
+            self.problem_to_json(join('..', out_file))
+            self.record_from_trace([self.get_state()], out_file.replace('.json','.gif'))
+            out_files.append(out_file)
+        return out_files
 
     def fix_problem_index(self, num):
         layout, goal = self._get_layout_from_mode(num)
@@ -268,8 +291,10 @@ class RobotKitchenEnv:
         data = json.load(open(in_file, 'r'))
         shape = data['shape']
         self._layout = np.zeros((shape[0], shape[1], len(OBJECTS)), dtype=bool)
+        self.set_state(eval(data['state']))
+        self._initial_layout = self._layout
         self._goal, self._goal_attributes = data['goal']
-        return self.set_state(eval(data['state']))
+        return self.reset()[0]
 
     def _init_token_images(self):
         for obj in self.OBJECTS:
@@ -353,7 +378,6 @@ class RobotKitchenEnv:
 
     def _move_obj_from_to(self, obj, ori, des):
 
-        print(ori)
         # Remove old object
         if len(ori) == 2:
             self._layout[ori[0], ori[1], obj] = 0
@@ -374,6 +398,7 @@ class RobotKitchenEnv:
                 self._move_obj_from_to(carried_object, ori, des)
 
     def _move_obj_to(self, obj, des):
+        # print('obj =', obj, 'obj_pos =', self._find_pos_by_obj(obj), 'des =', des)
         self._move_obj_from_to(obj, self._find_pos_by_obj(obj), des)
 
     def _get_obj_above_pos(self, pos):
@@ -615,10 +640,13 @@ class RobotKitchenEnvRelationalAction(object):
     def reset(self):
         return self.wrapped.reset()
 
+    def _shuffle_layout(self):
+        return self.wrapped._shuffle_layout()
+
     def render(self, dpi=150):
         return self.wrapped.render(dpi=dpi)
 
-    def render_from_state(self, state):
+    def render_from_state(self, state=None):
         self.set_state(state)
         return self.render()
 
@@ -649,16 +677,16 @@ class RobotKitchenEnvRelationalAction(object):
         action_cat, action_obj = action
         if action_cat == self.PICK_UP:
             if self.wrapped._attributes['carrying'] is None and not _check_empty(self.wrapped._find_pos_by_obj(action_obj)):
-                self.wrapped._move_obj_to(ROBOT, self.wrapped._find_pos_by_obj(action_obj))
-                self.wrapped._set_robot_carrying(action_obj) ## TODO: Test if this works
-                # if _check_empty(self.wrapped._get_obj_above_obj(action_obj)):
-                #     self.wrapped._move_obj_to(ROBOT, self.wrapped._find_pos_by_obj(action_obj))
-                #
-                #     self.wrapped._attributes['carrying'] = action_obj
-                #     if action_obj in self.wrapped._attributes['contained']:
-                #         container = self.wrapped._attributes['contained'][action_obj]
-                #         self.wrapped._attributes['containing'][container].remove(action_obj)
-                #         self.wrapped._attributes['contained'].pop(action_obj)
+
+                if _check_empty(self.wrapped._get_obj_above_obj(action_obj)):
+                    self.wrapped._move_obj_to(ROBOT, self.wrapped._find_pos_by_obj(action_obj))
+                    self.wrapped._set_robot_carrying(action_obj)  ## TODO: Test if this works
+
+                    # self.wrapped._attributes['carrying'] = action_obj
+                    # if action_obj in self.wrapped._attributes['contained']:
+                    #     container = self.wrapped._attributes['contained'][action_obj]
+                    #     self.wrapped._attributes['containing'][container].remove(action_obj)
+                    #     self.wrapped._attributes['contained'].pop(action_obj)
 
         elif action_cat == self.PLACE_ON:
 
@@ -677,7 +705,7 @@ class RobotKitchenEnvRelationalAction(object):
                 else:
                     if not _check_empty(self.wrapped._find_pos_by_obj(action_obj)):
                         tgt_r, tgt_c = self.wrapped._find_pos_by_obj(action_obj)
-                        if tgt_r > 1:
+                        if tgt_r >= 1:
                             tgt_r -= 1
                             self._step_place_on(tgt_r, tgt_c)
         else:
@@ -692,26 +720,26 @@ class RobotKitchenEnvRelationalAction(object):
         return self.get_state(), reward, done, {}
 
     def _step_place_on(self, tgt_r, tgt_c):
-        # object = self.wrapped._attributes['carrying']
-        # if object is not None:
-        #     self.wrapped._move_obj_to(object, (tgt_r, tgt_c))
+        object = self.wrapped._attributes['carrying']
+        if object is not None:
+            self.wrapped._move_obj_to(object, (tgt_r, tgt_c))
         self.wrapped._move_obj_to(ROBOT, (tgt_r, tgt_c))
-        self.wrapped._stop_robot_carrying()  ## TODO: Test if this works
 
-        # objects_below = self.wrapped._get_obj_below_pos((tgt_r, tgt_c))
-        # if len(objects_below) > 0:
-        #     object = self.wrapped._attributes['carrying']
-        #     if object:
-        #         self.wrapped._attributes['carrying'] = None
-        #
-        #         ## the object is now contained if there exists a container
-        #         objects = self.wrapped._get_objs_in_pos((tgt_r, tgt_c))
-        #         container = self.wrapped._get_container(objects)
-        #         if container:
-        #             if container not in self.wrapped._attributes['containing']:
-        #                 self.wrapped._attributes['containing'][container] = []
-        #             self.wrapped._attributes['containing'][container].append(object)
-        #             self.wrapped._attributes['contained'][object] = container
+        objects_below = self.wrapped._get_obj_below_pos((tgt_r, tgt_c))
+        if len(objects_below) > 0:
+            self.wrapped._stop_robot_carrying()  ## TODO: Test if this works
+            # object = self.wrapped._attributes['carrying']
+            # if object:
+            #     self.wrapped._attributes['carrying'] = None
+            #
+            #     ## the object is now contained if there exists a container
+            #     objects = self.wrapped._get_objs_in_pos((tgt_r, tgt_c))
+            #     container = self.wrapped._get_container(objects)
+            #     if container:
+            #         if container not in self.wrapped._attributes['containing']:
+            #             self.wrapped._attributes['containing'][container] = []
+            #         self.wrapped._attributes['containing'][container].append(object)
+            #         self.wrapped._attributes['contained'][object] = container
 
     def get_state(self):
         return self.wrapped.get_state()
@@ -953,7 +981,7 @@ def test_checking_goals_from_json():
         env.check_goal()
 
 def test_shuffle_layout():
-    env = RobotKitchenEnv(mode='simple')
+    env = RobotKitchenEnvRelationalAction(mode='simple')
     frames = [env.get_state()]
     for i in range(10):
         frames.append(env._shuffle_layout())
@@ -979,9 +1007,6 @@ if __name__ == "__main__":
     ## using the simple layout defined in layout.py
     # test_simple_layout()
 
-    ## shuffle objects on the table
-    test_shuffle_layout()
-
 
 
     ## ------------ RobotKitchenEnvRelationalAction()
@@ -990,7 +1015,10 @@ if __name__ == "__main__":
     # test_steps_relational()
 
     ## generate and reset with state txt file
-    # test_problem_from_json()
+    test_problem_from_json()
 
     ## check if a list of txt files meet the goal
     # test_checking_goals_from_json()
+
+    ## shuffle objects on the table
+    # test_shuffle_layout()
