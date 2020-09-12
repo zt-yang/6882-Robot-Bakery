@@ -1,6 +1,0 @@
-Environment: RobotKitchenEnvRelationalAction
-
----- Method: A*Uniform --------
-          Problem: 0 |  Stats: [  1.      2.103 654.      7.   ]
-          Problem: 1 |  Stats: [  0.    10.02 613.     4.  ]
----- Method: A*Custom --------
