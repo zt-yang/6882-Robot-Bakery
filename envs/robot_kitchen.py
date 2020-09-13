@@ -56,7 +56,7 @@ class RobotKitchenEnv:
     """
 
     ## Types of objects
-    OBJECTS = OBJ_CATS
+    OBJECTS = list(OBJ_CATS)
 
     ## used for printing and for token image in assets folder
     ## e.g., plt.imread(get_asset_path('table.png')),
@@ -519,14 +519,30 @@ class RobotKitchenEnv:
 
         return self.get_state(DEBUG=False), reward, done, {}
 
-    def get_state(self, DEBUG=False):
-        layout_state = tuple(('layout', tuple(sorted(map(tuple, np.argwhere(self._layout))))))
+    def get_state(self, DEBUG=False, LABEL=False):
+        positions = sorted(map(tuple, np.argwhere(self._layout)))
+        if LABEL: ## print the name of objects instead of numbers
+            labeled_positions = []
+            for item in positions:
+                num = item[2] - 1
+                if num == -1:
+                    num += len([o for o in dir(OBJ_CATS) if '__' not in o])
+                labeled_item = list(item)
+                labeled_item[2] = OBJECTS.__getitem__(num)
+                labeled_positions.append(tuple(labeled_item))
+            positions = tuple(labeled_positions)
+        layout_state = tuple(('layout', tuple(positions)))
+
         states = [layout_state]
         for attribute in self._attributes_in_state: ## for the attributes we care about
             states.append(tuple((attribute, self._attributes[attribute])))
         state = tuple(states)
         if DEBUG: print(state)
         return state
+
+    def get_translated_state(self):
+        layout_state = tuple(('layout', tuple(sorted(map(tuple, np.argwhere(self._layout))))))
+
 
     def _get_state_var(self, trg_var, state=None):
         if state==None: state = self.get_state()
@@ -741,9 +757,9 @@ class RobotKitchenEnvRelationalAction(object):
             #         self.wrapped._attributes['containing'][container].append(object)
             #         self.wrapped._attributes['contained'][object] = container
 
-    def get_state(self):
-        return self.wrapped.get_state()
-        return tuple(sorted(map(tuple, np.argwhere(self._layout))))
+    def get_state(self, DEBUG=False, LABEL=False):
+        return self.wrapped.get_state(DEBUG=DEBUG, LABEL=LABEL)
+        # return tuple(sorted(map(tuple, np.argwhere(self._layout))))
 
     def set_state(self, state):
         return self.wrapped.set_state(state)

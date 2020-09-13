@@ -105,8 +105,16 @@ def plan(env, method, out_file=None, max_steps=40, timeout=10, heuristic_scale=1
 
             # if goal is reached, extract the path from current_node
             if env.check_goal(state) or time.time() - start_time > timeout:
+
+                ## TODO: DEBUG
+                # print(env.check_goal(state))
+                # env.set_state(state)
+                # print(env.check_goal())
+
                 success_rate = 1
-                if time.time() - start_time > timeout: success_rate = 0
+                if time.time() - start_time > timeout:
+                    success_rate = 0
+                    print('timeout')
                 time_taken = round(time.time() - start_time, 3)
                 nodes_expanded = len(visited_list)
                 steps_in_env = extract_path(current_node, env=env, out_file=out_file)
@@ -259,22 +267,16 @@ def test_compare_env():
 
 def test_RobotKitchenEnvRelationalAction():
     env = RobotKitchenEnvRelationalAction(mode='simple')
+    # env = RobotKitchenEnv(mode='simple')
 
-    # ## test planning
-    env.init_problem_from_json(join('tests', '0912-12-02-45', 'problems', 'P0x0.json'))
-    plan(env, 'A*Custom', out_file='test', timeout=3, heuristic_scale=2)
+    ## test planning
+    env.init_problem_from_json(join('tests', '0912-19-00-58', 'problems', 'P0x0.json'))
+    print(plan(env, 'A*Custom', out_file='test', timeout=3, heuristic_scale=2))
+    print(env.get_state(LABEL=True))
+    print(env.check_goal(env.get_state()))
 
-    # ## test goal checking
-    # env.init_problem_from_json(join('tests', '0912-12-02-45', '1', 'RP0x0_A*Custom.json'))
-    # print(env.check_goal())
-    # # display_image(env.render_from_state(), '')
-    # # plt.show()
-    #
-    # env1 = RobotKitchenEnv(mode='simple')
-    # env1.set_state(env.get_state())
-    # print(env.check_goal())
 
 if __name__ == "__main__":
-    test_compare_env()
-    # test_RobotKitchenEnvRelationalAction()
+    # test_compare_env()
+    test_RobotKitchenEnvRelationalAction()
 
